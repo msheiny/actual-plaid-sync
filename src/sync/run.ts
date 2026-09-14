@@ -1,4 +1,5 @@
 import type { ActualGateway, ImportResult } from '../actual/session.js';
+import { ActualError } from '../actual/session.js';
 import type { SyncConfig } from '../config.js';
 import type { Logger } from '../log.js';
 import { maskToken } from '../log.js';
@@ -36,6 +37,14 @@ export function formatSummary(accountName: string, plan: AccountPlan): string {
 
 function formatCents(cents: number): string {
   return (cents / 100).toFixed(2);
+}
+
+// Never includes a raw error object or unmasked secret: only the message (and, for an
+// ActualError, its hint) are ever attacker/PII-free text produced by our own error classes.
+function accountFailureDetail(err: unknown): string {
+  if (err instanceof ActualError) return `${err.message} (${err.hint})`;
+  if (err instanceof Error) return err.message;
+  return String(err);
 }
 
 function logDryRun(log: Logger, name: string, plan: AccountPlan): void {
@@ -127,28 +136,38 @@ export async function runSync(cfg: SyncConfig, deps: SyncDeps): Promise<0 | 1> {
 
     // planAccount does no account filtering itself, so only this mapping's Plaid txns and
     // only this mapping's Actual rows (loaded with the extended lookback window) are passed in.
-    const rows = await gateway.getTransactions(account.id, window.lookbackStart, window.end);
-    const plan = planAccount(
-      account.id,
-      txnsByAccount.get(mapping.plaidAccountId) ?? [],
-      rows,
-      window,
-    );
-    for (const notice of plan.notices) {
-      log.warn(`${account.name}: skipped ${notice.actualId} (${notice.reason}): ${notice.detail}`);
-    }
+    // A gateway failure anywhere in this block (read, plan, or write) must not abort later
+    // mappings, so it is caught and turned into a failed-account log line instead of a thrown
+    // error escaping runSync.
+    try {
+      const rows = await gateway.getTransactions(account.id, window.lookbackStart, window.end);
+      const plan = planAccount(
+        account.id,
+        txnsByAccount.get(mapping.plaidAccountId) ?? [],
+        rows,
+        window,
+      );
+      for (const notice of plan.notices) {
+        log.warn(
+          `${account.name}: skipped ${notice.actualId} (${notice.reason}): ${notice.detail}`,
+        );
+      }
 
-    if (cfg.dryRun) {
-      logDryRun(log, account.name, plan);
-      continue;
-    }
+      if (cfg.dryRun) {
+        logDryRun(log, account.name, plan);
+        continue;
+      }
 
-    const result = await executePlan(gateway, plan);
-    for (const message of result.errors) {
-      log.error(`${account.name}: import error: ${message}`);
+      const result = await executePlan(gateway, plan);
+      for (const message of result.errors) {
+        log.error(`${account.name}: import error: ${message}`);
+        failed = true;
+      }
+      log.info(formatSummary(account.name, plan));
+    } catch (err) {
       failed = true;
+      log.error(`${account.name}: failed: ${accountFailureDetail(err)}`);
     }
-    log.info(formatSummary(account.name, plan));
   }
 
   return failed ? 1 : 0;

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ActualAccountInfo, ActualGateway, ImportResult } from '../../src/actual/session.js';
+import { ActualError } from '../../src/actual/session.js';
 import type { SyncConfig } from '../../src/config.js';
 import { createLogger } from '../../src/log.js';
 import { PlaidRequestError } from '../../src/plaid/client.js';
@@ -19,6 +20,8 @@ class FakeGateway implements ActualGateway {
   calls: string[] = [];
   importErrors: string[] = [];
   getTransactionsCalls: Array<{ accountId: string; start: string; end: string }> = [];
+  getTransactionsErrors: Map<string, Error> = new Map();
+  updateErrors: Map<string, Error> = new Map();
   constructor(
     public accounts: ActualAccountInfo[],
     public rows: Map<string, ActualTxn[]> = new Map(),
@@ -28,6 +31,8 @@ class FakeGateway implements ActualGateway {
   }
   async getTransactions(accountId: string, start: string, end: string): Promise<ActualTxn[]> {
     this.getTransactionsCalls.push({ accountId, start, end });
+    const err = this.getTransactionsErrors.get(accountId);
+    if (err) throw err;
     return (this.rows.get(accountId) ?? []).filter((r) => r.date >= start && r.date <= end);
   }
   async importTransactions(accountId: string, txns: ImportTxn[]): Promise<ImportResult> {
@@ -35,6 +40,8 @@ class FakeGateway implements ActualGateway {
     return { added: txns.map((t) => t.imported_id), updated: [], errors: this.importErrors };
   }
   async updateTransaction(id: string, fields: UpdateFields): Promise<void> {
+    const err = this.updateErrors.get(id);
+    if (err) throw err;
     this.calls.push(`update ${id} ${JSON.stringify(fields)}`);
   }
   async deleteTransaction(id: string): Promise<void> {
@@ -261,6 +268,18 @@ describe('runSync', () => {
   it('logs a relink error for one bank, still syncs the other, and returns 1', async () => {
     const { gateway, good } = scenario();
     gateway.accounts.push({ id: 'actual-card', name: 'Amex', closed: false, offbudget: false });
+    // Mass-delete guard: if the account-not-covered check were removed, this uncleared row
+    // (non-null importedId, dated inside the trusted range) would be planned against an empty
+    // Plaid txn list for the unfetched bank and deleted as a "cancelled hold".
+    gateway.rows.set('actual-card', [
+      actualRow({
+        id: 'card-row-1',
+        account: 'actual-card',
+        importedId: 'card-pend-1',
+        date: '2026-09-05',
+        amount: -400,
+      }),
+    ]);
     const { log, has } = logSink();
     const code = await runSync(
       config({
@@ -289,11 +308,23 @@ describe('runSync', () => {
     expect(has('access-bad-9999')).toBe(false);
     expect(has('not found on any access token')).toBe(false);
     expect(has('Chase Checking: 1 added')).toBe(true);
+    expect(gateway.getTransactionsCalls.some((c) => c.accountId === 'actual-card')).toBe(false);
+    expect(gateway.calls).not.toContain('delete card-row-1');
   });
 
   it('treats PRODUCT_NOT_READY as a warning and returns 0', async () => {
     const { gateway, good } = scenario();
     gateway.accounts.push({ id: 'actual-card', name: 'Amex', closed: false, offbudget: false });
+    // Mass-delete guard: see the relink test above for why this row must survive untouched.
+    gateway.rows.set('actual-card', [
+      actualRow({
+        id: 'card-row-1',
+        account: 'actual-card',
+        importedId: 'card-pend-1',
+        date: '2026-09-05',
+        amount: -400,
+      }),
+    ]);
     const { log, lines, has } = logSink();
     const code = await runSync(
       config({
@@ -317,6 +348,8 @@ describe('runSync', () => {
     expect(lines.some((l) => l.includes(' WARN ') && l.includes('…2222'))).toBe(true);
     expect(lines.some((l) => l.includes(' ERROR '))).toBe(false);
     expect(has('Chase Checking: 1 added')).toBe(true);
+    expect(gateway.getTransactionsCalls.some((c) => c.accountId === 'actual-card')).toBe(false);
+    expect(gateway.calls).not.toContain('delete card-row-1');
   });
 
   it('logs other Plaid errors with their code and returns 1', async () => {
@@ -372,6 +405,7 @@ describe('runSync', () => {
     expect(
       has('ACCOUNT_MAP references Plaid account plaid-ghost not found on any access token'),
     ).toBe(true);
+    expect(gateway.calls).toEqual([]);
   });
 
   it('returns 1 and logs each import error', async () => {
@@ -386,6 +420,117 @@ describe('runSync', () => {
     });
     expect(code).toBe(1);
     expect(has('Chase Checking: import error: Transaction date is invalid')).toBe(true);
+  });
+
+  // Controller review, fix round 1, finding 1: a gateway write rejecting for one account must
+  // not abort later accounts in ACCOUNT_MAP, and must not throw out of runSync.
+  it('logs an ActualError with its hint for one account, still applies the other, and returns 1', async () => {
+    const gateway = new FakeGateway(
+      [
+        { id: 'actual-a', name: 'Account A', closed: false, offbudget: false },
+        { id: 'actual-b', name: 'Account B', closed: false, offbudget: false },
+      ],
+      new Map([
+        [
+          'actual-a',
+          [
+            actualRow({
+              id: 'row-a',
+              account: 'actual-a',
+              importedId: 'pend-a',
+              date: '2026-09-11',
+              amount: -500,
+            }),
+          ],
+        ],
+        ['actual-b', []],
+      ]),
+    );
+    gateway.updateErrors.set(
+      'row-a',
+      new ActualError('write failed', 'network-failure', 'check ACTUAL_SERVER_URL is reachable'),
+    );
+    const { log, has } = logSink();
+    const code = await runSync(
+      config({
+        accountMap: [
+          { plaidAccountId: 'plaid-a', actualAccountId: 'actual-a' },
+          { plaidAccountId: 'plaid-b', actualAccountId: 'actual-b' },
+        ],
+      }),
+      {
+        gateway,
+        log,
+        today: TODAY,
+        fetchTransactions: async () => ({
+          accountIds: ['plaid-a', 'plaid-b'],
+          transactions: [
+            plaidTxn({
+              transactionId: 'pend-a',
+              accountId: 'plaid-a',
+              pending: true,
+              amount: 6,
+              date: '2026-09-11',
+            }),
+            plaidTxn({
+              transactionId: 'new-b',
+              accountId: 'plaid-b',
+              amount: 12,
+              date: '2026-09-12',
+            }),
+          ],
+        }),
+      },
+    );
+    expect(code).toBe(1);
+    expect(has('Account A: failed: write failed (check ACTUAL_SERVER_URL is reachable)')).toBe(
+      true,
+    );
+    expect(gateway.calls).toContain('import actual-b new-b');
+  });
+
+  it('logs a getTransactions failure for one account, still applies the other, and returns 1', async () => {
+    const gateway = new FakeGateway(
+      [
+        { id: 'actual-a', name: 'Account A', closed: false, offbudget: false },
+        { id: 'actual-b', name: 'Account B', closed: false, offbudget: false },
+      ],
+      new Map([['actual-b', []]]),
+    );
+    gateway.getTransactionsErrors.set(
+      'actual-a',
+      new ActualError('budget locked', 'network-failure', 'check ACTUAL_SERVER_URL is reachable'),
+    );
+    const { log, has } = logSink();
+    const code = await runSync(
+      config({
+        accountMap: [
+          { plaidAccountId: 'plaid-a', actualAccountId: 'actual-a' },
+          { plaidAccountId: 'plaid-b', actualAccountId: 'actual-b' },
+        ],
+      }),
+      {
+        gateway,
+        log,
+        today: TODAY,
+        fetchTransactions: async () => ({
+          accountIds: ['plaid-a', 'plaid-b'],
+          transactions: [
+            plaidTxn({
+              transactionId: 'new-b',
+              accountId: 'plaid-b',
+              amount: 12,
+              date: '2026-09-12',
+            }),
+          ],
+        }),
+      },
+    );
+    expect(code).toBe(1);
+    expect(has('Account A: failed: budget locked (check ACTUAL_SERVER_URL is reachable)')).toBe(
+      true,
+    );
+    expect(gateway.calls).toContain('import actual-b new-b');
   });
 
   // Controller decision 1 (Task 4 review): planAccount does no account filtering itself, so
