@@ -141,7 +141,8 @@ Update mode keeps the same access token and Item slot, so the Secret does not ch
 - A pending row that disappears from Plaid is treated as a cancelled hold and deleted, but only when dated at least 3 days inside the sync window. Older ones only get a log notice.
 - Reconciled transactions and split parents are never changed or deleted; they get a notice instead.
 - Map only accounts that this tool feeds exclusively. An *uncleared* transaction with an imported ID in a mapped account (for example from a manual bank-file import) that Plaid no longer reports is treated as a cancelled hold and deleted.
-- Transactions you deleted in Actual are not re-imported.
+- A pending transaction you delete in Actual comes back once it posts: Plaid gives the posted transaction a new id, so it is imported again as a new row.
+- Actual may match an imported pending transaction to an existing uncleared transaction you entered by hand instead of adding a new row, if it has the same amount and is dated within about 7 days. If that hold is later cancelled, the matched transaction (not a newly-added one) can be deleted. The sync logs a warning whenever a match like this happens.
 - Some banks (e.g. Capital One, USAA) don't link pending and posted transactions. For those, the posted transaction is imported as new and the pending row is removed. There are no duplicates, but a category set on the pending row is lost.
 
 ## Dry run

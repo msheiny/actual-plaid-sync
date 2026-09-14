@@ -44,6 +44,12 @@ jobs:
           set -e
           echo "sync without config exited with ${code}"
           test "${code}" -eq 2
+          # The native module built into the image (@actual-app/api bundles a better-sqlite3
+          # native addon) only gets exercised by loading it, not by --help or a config-error
+          # exit -- load it directly so a broken/missing native build fails CI, not a user's
+          # CronJob at 3am.
+          docker run --rm --read-only --tmpfs /tmp --entrypoint node actual-plaid-sync:ci \
+            -e "require('@actual-app/api')"
 
   e2e:
     runs-on: ubuntu-24.04

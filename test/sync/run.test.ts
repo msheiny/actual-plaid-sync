@@ -19,6 +19,7 @@ const TODAY = '2026-09-13';
 class FakeGateway implements ActualGateway {
   calls: string[] = [];
   importErrors: string[] = [];
+  importUpdated: string[] = [];
   getTransactionsCalls: Array<{ accountId: string; start: string; end: string }> = [];
   getTransactionsErrors: Map<string, Error> = new Map();
   updateErrors: Map<string, Error> = new Map();
@@ -37,7 +38,11 @@ class FakeGateway implements ActualGateway {
   }
   async importTransactions(accountId: string, txns: ImportTxn[]): Promise<ImportResult> {
     this.calls.push(`import ${accountId} ${txns.map((t) => t.imported_id).join(',')}`);
-    return { added: txns.map((t) => t.imported_id), updated: [], errors: this.importErrors };
+    return {
+      added: txns.map((t) => t.imported_id),
+      updated: this.importUpdated,
+      errors: this.importErrors,
+    };
   }
   async updateTransaction(id: string, fields: UpdateFields): Promise<void> {
     const err = this.updateErrors.get(id);
@@ -420,6 +425,28 @@ describe('runSync', () => {
     });
     expect(code).toBe(1);
     expect(has('Chase Checking: import error: Transaction date is invalid')).toBe(true);
+  });
+
+  // F-I4: importTransactions fuzzy-matches new rows against an existing uncleared row (same
+  // amount, date within ~7 days) and reports the matched row's id in `updated`. That must be
+  // surfaced as a warning, since a later-cancelled hold could delete the matched row instead of
+  // a newly-added one.
+  it('warns once per id reported in result.updated after a non-dry-run import', async () => {
+    const { gateway, good } = scenario();
+    gateway.importUpdated = ['row-x'];
+    const { log, has } = logSink();
+    const code = await runSync(config(), {
+      gateway,
+      log,
+      today: TODAY,
+      fetchTransactions: async () => good,
+    });
+    expect(code).toBe(0);
+    expect(
+      has(
+        'Chase Checking: import matched an existing transaction row-x instead of adding a new one',
+      ),
+    ).toBe(true);
   });
 
   // Controller review, fix round 1, finding 1: a gateway write rejecting for one account must

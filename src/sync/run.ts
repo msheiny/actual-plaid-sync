@@ -159,6 +159,16 @@ export async function runSync(cfg: SyncConfig, deps: SyncDeps): Promise<0 | 1> {
       }
 
       const result = await executePlan(gateway, plan);
+      // F-I4: importTransactions fuzzy-matches a new row against an existing uncleared row
+      // (same amount, date within ~7 days) instead of adding it, and reports the matched row's
+      // id here. That match is silent otherwise, and if the matched hold later disappears from
+      // Plaid, the existing (possibly hand-entered) transaction could be deleted as a cancelled
+      // hold -- so it's surfaced as a warning rather than left invisible.
+      for (const id of result.updated) {
+        log.warn(
+          `${account.name}: import matched an existing transaction ${id} instead of adding a new one; if a pending hold later disappears from Plaid, that transaction may be deleted`,
+        );
+      }
       for (const message of result.errors) {
         log.error(`${account.name}: import error: ${message}`);
         failed = true;
