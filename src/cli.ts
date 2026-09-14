@@ -59,7 +59,14 @@ async function runLink(env: NodeJS.ProcessEnv, opts: LinkOptions): Promise<numbe
   const client = createPlaidClient(cfg.plaid);
   // Throws ConfigError in update mode without an access token; see resolveLinkConfig above.
   const deps = createLinkDeps(client, cfg, mode);
-  const server = await startLinkServer({ mode, host: cfg.host, port: cfg.port, deps, log });
+  const server = await startLinkServer({
+    mode,
+    host: cfg.host,
+    port: cfg.port,
+    deps,
+    log,
+    ...(mode === 'update' && cfg.accessToken ? { accessToken: cfg.accessToken } : {}),
+  });
 
   let onSigint: () => void = () => undefined;
   const interrupted = new Promise<'interrupted'>((resolve) => {

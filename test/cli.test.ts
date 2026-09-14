@@ -122,6 +122,89 @@ describe('main', () => {
     expect(stderr.join('')).toContain('LINK_ACCESS_TOKEN');
   });
 
+  // Fix round 1 (Critical finding): resolveLinkConfig resolves an update-mode access token, but
+  // it was being dropped before the startLinkServer call, so link --update always threw
+  // "accessToken is required in update mode" even with a valid token. These three tests pin that
+  // the resolved token actually reaches startLinkServer for all three ways it can be supplied.
+  it('runs link --update through to success with a token from --access-token', async () => {
+    const close = vi.fn().mockResolvedValue(undefined);
+    mocks.startLinkServer.mockResolvedValue({
+      url: 'http://localhost:18585',
+      result: Promise.resolve({
+        accessToken: 'access-sandbox-abcd',
+        itemId: null,
+        accounts: [],
+      }),
+      close,
+    });
+    const env = { PLAID_CLIENT_ID: 'client-id', PLAID_SECRET: 'secret', PLAID_ENV: 'sandbox' };
+
+    await expect(
+      main(['link', '--update', '--access-token', 'access-sandbox-abcd'], env),
+    ).resolves.toBe(0);
+
+    expect(mocks.startLinkServer).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: 'update', accessToken: 'access-sandbox-abcd' }),
+    );
+    expect(close).toHaveBeenCalledTimes(1);
+    // Never assert on the raw token beyond what formatLinkResult legitimately prints.
+    expect(stdout.join('')).not.toContain('access-sandbox-abcd');
+  });
+
+  it('runs link --update through to success with a token from LINK_ACCESS_TOKEN', async () => {
+    const close = vi.fn().mockResolvedValue(undefined);
+    mocks.startLinkServer.mockResolvedValue({
+      url: 'http://localhost:18585',
+      result: Promise.resolve({
+        accessToken: 'access-sandbox-efgh',
+        itemId: null,
+        accounts: [],
+      }),
+      close,
+    });
+    const env = {
+      PLAID_CLIENT_ID: 'client-id',
+      PLAID_SECRET: 'secret',
+      PLAID_ENV: 'sandbox',
+      LINK_ACCESS_TOKEN: 'access-sandbox-efgh',
+    };
+
+    await expect(main(['link', '--update'], env)).resolves.toBe(0);
+
+    expect(mocks.startLinkServer).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: 'update', accessToken: 'access-sandbox-efgh' }),
+    );
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('prefers --access-token over LINK_ACCESS_TOKEN when both are given', async () => {
+    const close = vi.fn().mockResolvedValue(undefined);
+    mocks.startLinkServer.mockResolvedValue({
+      url: 'http://localhost:18585',
+      result: Promise.resolve({
+        accessToken: 'access-sandbox-flag',
+        itemId: null,
+        accounts: [],
+      }),
+      close,
+    });
+    const env = {
+      PLAID_CLIENT_ID: 'client-id',
+      PLAID_SECRET: 'secret',
+      PLAID_ENV: 'sandbox',
+      LINK_ACCESS_TOKEN: 'access-sandbox-env',
+    };
+
+    await expect(
+      main(['link', '--update', '--access-token', 'access-sandbox-flag'], env),
+    ).resolves.toBe(0);
+
+    expect(mocks.startLinkServer).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: 'update', accessToken: 'access-sandbox-flag' }),
+    );
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
   // Controller decision 5: pins that a successful link closes the server (not just the SIGINT
   // path, which is covered by the brief's Step 8 manual smoke test).
   it('prints the link result and closes the server after a successful link', async () => {
