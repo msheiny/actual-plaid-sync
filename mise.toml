@@ -1,0 +1,42 @@
+[tools]
+node = "24.21.0"
+"aqua:pnpm/pnpm" = "12.4.1"
+
+[tasks.install]
+description = "Install dependencies from pnpm-lock.yaml"
+run = "pnpm install"
+
+[tasks.build]
+description = "Compile src/ to dist/"
+run = "pnpm run build"
+
+[tasks.typecheck]
+description = "Type-check src/ and test/"
+run = "pnpm run typecheck"
+
+[tasks.test]
+description = "Run unit tests"
+run = "pnpm run test"
+
+[tasks.lint]
+description = "Lint and format-check with Biome"
+run = "pnpm run lint"
+
+[tasks.check]
+description = "Lint, type-check, and test"
+depends = ["lint", "typecheck", "test"]
+
+[tasks.link]
+description = "Connect a bank with Plaid Link (pass extra flags after --)"
+depends = ["build"]
+run = "node dist/cli.js link"
+
+[tasks.accounts]
+description = "List Plaid and Actual accounts and suggest ACCOUNT_MAP"
+depends = ["build"]
+run = "node dist/cli.js accounts"
+
+[tasks.sync]
+description = "Sync Plaid transactions into Actual"
+depends = ["build"]
+run = "node dist/cli.js sync"
