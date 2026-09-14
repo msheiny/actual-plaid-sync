@@ -40,3 +40,7 @@ run = "node dist/cli.js accounts"
 description = "Sync Plaid transactions into Actual"
 depends = ["build"]
 run = "node dist/cli.js sync"
+
+[tasks.e2e]
+description = "End-to-end sync test: Plaid Sandbox + actual-server at ACTUAL_E2E_SERVER_URL (sync suite needs PLAID_SANDBOX_CLIENT_ID/PLAID_SANDBOX_SECRET)"
+run = "pnpm exec vitest run --config vitest.e2e.config.ts"

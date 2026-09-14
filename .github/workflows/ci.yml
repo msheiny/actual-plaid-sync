@@ -44,3 +44,33 @@ jobs:
           set -e
           echo "sync without config exited with ${code}"
           test "${code}" -eq 2
+
+  e2e:
+    runs-on: ubuntu-24.04
+    needs: check
+    env:
+      PLAID_SANDBOX_CLIENT_ID: ${{ secrets.PLAID_SANDBOX_CLIENT_ID }}
+      PLAID_SANDBOX_SECRET: ${{ secrets.PLAID_SANDBOX_SECRET }}
+      ACTUAL_E2E_SERVER_URL: http://localhost:5006
+      ACTUAL_E2E_PASSWORD: e2e-password
+    services:
+      actual:
+        # Keep the tag equal to the pinned @actual-app/api version (Renovate groups them).
+        image: actualbudget/actual-server:26.9.0@sha256:552beab3dec8c93d46b8b9245612d63c3f123b8a45063a474f53e229b17621d3
+        ports:
+          - 5006:5006
+    steps:
+      # Secrets are not allowed in job-level `if`, and are empty on fork PRs: gate each step on env instead.
+      - name: Skip (Plaid Sandbox secrets not configured)
+        if: env.PLAID_SANDBOX_CLIENT_ID == '' || env.PLAID_SANDBOX_SECRET == ''
+        run: echo "::notice title=e2e skipped::Set PLAID_SANDBOX_CLIENT_ID and PLAID_SANDBOX_SECRET repository secrets to run the end-to-end test."
+      - uses: actions/checkout@v7
+        if: env.PLAID_SANDBOX_CLIENT_ID != '' && env.PLAID_SANDBOX_SECRET != ''
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        if: env.PLAID_SANDBOX_CLIENT_ID != '' && env.PLAID_SANDBOX_SECRET != ''
+      - name: Install dependencies
+        if: env.PLAID_SANDBOX_CLIENT_ID != '' && env.PLAID_SANDBOX_SECRET != ''
+        run: pnpm install --frozen-lockfile
+      - name: Build and run e2e
+        if: env.PLAID_SANDBOX_CLIENT_ID != '' && env.PLAID_SANDBOX_SECRET != ''
+        run: mise run build && mise run e2e
