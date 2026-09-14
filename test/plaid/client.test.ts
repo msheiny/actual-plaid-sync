@@ -1,3 +1,4 @@
+import { inspect } from 'node:util';
 import { describe, expect, it, vi } from 'vitest';
 import {
   classifyPlaidError,
@@ -19,6 +20,37 @@ function plaidHttpError(status: number, errorType: string, errorCode: string) {
         request_id: 'req-123',
       },
     },
+  };
+}
+
+const SENSITIVE_CONFIG = {
+  headers: { 'PLAID-SECRET': 'secret-abc123', 'PLAID-CLIENT-ID': 'client-1' },
+  data: '{"access_token":"access-sandbox-xyz9"}',
+};
+
+function axiosResponseErrorWithConfig(status: number, errorType: string, errorCode: string) {
+  return {
+    isAxiosError: true,
+    message: `Request failed with status code ${status}`,
+    config: SENSITIVE_CONFIG,
+    response: {
+      status,
+      data: {
+        error_type: errorType,
+        error_code: errorCode,
+        error_message: 'something happened',
+        request_id: 'req-999',
+      },
+    },
+  };
+}
+
+function axiosNetworkErrorWithConfig() {
+  return {
+    isAxiosError: true,
+    message: 'Network Error',
+    code: 'ECONNRESET',
+    config: SENSITIVE_CONFIG,
   };
 }
 
@@ -85,6 +117,22 @@ describe('classifyPlaidError', () => {
   it('returns an existing PlaidRequestError unchanged', () => {
     const original = new PlaidRequestError('x', 'fatal', 'X', null);
     expect(classifyPlaidError(original)).toBe(original);
+  });
+
+  it('does not leak PLAID-SECRET or access_token via cause for an HTTP response error', () => {
+    const err = classifyPlaidError(
+      axiosResponseErrorWithConfig(400, 'INVALID_INPUT', 'INVALID_ACCESS_TOKEN'),
+    );
+    const inspected = inspect(err, { depth: null });
+    expect(inspected).not.toContain('secret-abc123');
+    expect(inspected).not.toContain('access-sandbox-xyz9');
+  });
+
+  it('does not leak PLAID-SECRET or access_token via cause for a no-response network error', () => {
+    const err = classifyPlaidError(axiosNetworkErrorWithConfig());
+    const inspected = inspect(err, { depth: null });
+    expect(inspected).not.toContain('secret-abc123');
+    expect(inspected).not.toContain('access-sandbox-xyz9');
   });
 });
 

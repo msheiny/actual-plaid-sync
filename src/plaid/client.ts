@@ -41,6 +41,9 @@ const RELINK_CODES = new Set(['ITEM_LOGIN_REQUIRED', 'PENDING_EXPIRATION', 'PEND
 
 interface AxiosLikeError {
   message?: unknown;
+  code?: unknown;
+  isAxiosError?: unknown;
+  config?: unknown;
   response?: {
     status?: unknown;
     data?: {
@@ -56,13 +59,40 @@ function str(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
+/**
+ * True for anything shaped like an Axios error (real or a test double), which may carry
+ * `config`/`request` objects holding the raw PLAID-SECRET header and access_token body.
+ * Those objects must never be attached as `cause` — see classifyPlaidError below.
+ */
+function isAxiosShaped(e: AxiosLikeError): boolean {
+  return e.isAxiosError === true || 'config' in e || 'response' in e;
+}
+
+/** Minimal, secret-free summary of an Axios-shaped error, safe to attach as `cause`. */
+function sanitizeAxiosCause(e: AxiosLikeError): Record<string, unknown> {
+  const status = typeof e.response?.status === 'number' ? e.response.status : null;
+  const data = e.response?.data;
+  return {
+    status,
+    errorType: str(data?.error_type),
+    errorCode: str(data?.error_code),
+    errorMessage: str(data?.error_message),
+    requestId: str(data?.request_id),
+    axiosCode: str(e.code),
+  };
+}
+
 export function classifyPlaidError(err: unknown): PlaidRequestError {
   if (err instanceof PlaidRequestError) return err;
   const e = (typeof err === 'object' && err !== null ? err : {}) as AxiosLikeError;
+  // Never attach the raw Axios error as `cause`: it may carry `config`/`request` objects
+  // with the raw PLAID-SECRET header and access_token body. A plain (non-Axios) Error is
+  // safe to keep as-is.
+  const cause = isAxiosShaped(e) ? sanitizeAxiosCause(e) : err;
   const response = e.response;
   if (!response) {
     const message = str(e.message) ?? String(err);
-    return new PlaidRequestError(`Plaid network error: ${message}`, 'retryable', null, null, err);
+    return new PlaidRequestError(`Plaid network error: ${message}`, 'retryable', null, null, cause);
   }
   const status = typeof response.status === 'number' ? response.status : 0;
   const code = str(response.data?.error_code);
@@ -77,7 +107,7 @@ export function classifyPlaidError(err: unknown): PlaidRequestError {
   else if (status === 429 || status >= 500 || type === 'RATE_LIMIT_EXCEEDED') kind = 'retryable';
   else kind = 'fatal';
 
-  return new PlaidRequestError(message, kind, code, requestId, err);
+  return new PlaidRequestError(message, kind, code, requestId, cause);
 }
 
 export async function withRetry<T>(
