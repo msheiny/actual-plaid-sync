@@ -1,0 +1,85 @@
+# Example deployment for actual-plaid-sync.
+#   1. Replace every `change-me` value below (see README "Configuration").
+#   2. kubectl apply -n <namespace> -f deploy/cronjob.yaml
+# Prefer creating the Secret out-of-band (sealed-secrets, external-secrets, SOPS) instead of committing real values.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: actual-plaid-sync
+  labels:
+    app.kubernetes.io/name: actual-plaid-sync
+type: Opaque
+stringData:
+  PLAID_CLIENT_ID: change-me
+  PLAID_SECRET: change-me
+  PLAID_ENV: production
+  # Comma-separated, one access token per bank login (output of `link`).
+  PLAID_ACCESS_TOKENS: change-me
+  # Comma-separated plaidAccountId:actualAccountId pairs (output of `accounts`).
+  ACCOUNT_MAP: change-me
+  ACTUAL_SERVER_URL: change-me
+  ACTUAL_PASSWORD: change-me
+  # Actual: Settings -> Advanced -> Sync ID
+  ACTUAL_SYNC_ID: change-me
+  # Only for end-to-end encrypted budgets; delete the line otherwise.
+  ACTUAL_ENCRYPTION_PASSWORD: change-me
+  SYNC_DAYS: "30"
+  DRY_RUN: "false"
+  LOG_LEVEL: info
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: actual-plaid-sync
+  labels:
+    app.kubernetes.io/name: actual-plaid-sync
+spec:
+  schedule: "0 */6 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 900
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: actual-plaid-sync
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: sync
+              # Pin a release tag, or better also its digest: append "@sha256:" plus the digest listed
+              # for that tag on the GHCR package page (github.com/msheiny/actual-plaid-sync/pkgs/container/actual-plaid-sync).
+              image: ghcr.io/msheiny/actual-plaid-sync:0.1.0
+              args: ["sync"]
+              envFrom:
+                - secretRef:
+                    name: actual-plaid-sync
+              securityContext:
+                readOnlyRootFilesystem: true
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  memory: 512Mi
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir:
+                sizeLimit: 256Mi
