@@ -72,4 +72,18 @@ describe('withApi', () => {
     expect(actual.shutdown).toHaveBeenCalledTimes(1);
     expect(after).toEqual(before);
   });
+
+  it('removes the temp dir and rejects with the shutdown error when init and fn both succeed but shutdown fails', async () => {
+    vi.mocked(actual.init).mockResolvedValue(undefined as never);
+    const shutdownError = new Error('shutdown failed');
+    vi.mocked(actual.shutdown).mockRejectedValueOnce(shutdownError);
+
+    const before = await leakedTempDirs();
+    await expect(withApi('http://localhost:5006', 'pw', async () => 'ok')).rejects.toBe(
+      shutdownError,
+    );
+    const after = await leakedTempDirs();
+
+    expect(after).toEqual(before);
+  });
 });

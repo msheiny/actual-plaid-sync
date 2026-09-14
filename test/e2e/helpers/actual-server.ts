@@ -39,10 +39,12 @@ export async function bootstrapServer(
 }
 
 /**
- * Runs `fn` against a fresh, logged-in Actual API session and always cleans up: `init` runs inside
- * the `try` (not before it), so a failure there still reaches the `finally`. `shutdown()` may itself
- * throw when `init` never succeeded; that failure is swallowed so it never masks the error already
- * propagating from `try`, and the temp dir removal always runs regardless.
+ * Runs `fn` against a fresh, logged-in Actual API session and always cleans up. `init` runs inside
+ * the `try` (not before it), so a failure there still reaches cleanup. Mirrors the shutdown rule of
+ * `withBudget` in src/actual/session.ts: if `init` or `fn` already failed, `shutdown()` is still
+ * attempted but its failure is swallowed so it never masks the original error; if `init` and `fn`
+ * both succeeded, a `shutdown()` failure is a real failure and is what `withApi` rejects with. The
+ * temp dir removal always runs, in every path.
  */
 export async function withApi<T>(
   serverUrl: string,
@@ -51,13 +53,20 @@ export async function withApi<T>(
 ): Promise<T> {
   const dataDir = await mkdtemp(join(tmpdir(), 'actual-plaid-sync-e2e-'));
   try {
-    await actual.init({ dataDir, serverURL: serverUrl, password, verbose: false });
-    return await fn();
+    let result: T;
+    try {
+      await actual.init({ dataDir, serverURL: serverUrl, password, verbose: false });
+      result = await fn();
+    } catch (err) {
+      // init or fn already failed; shutdown is still attempted so the session ends cleanly,
+      // but its failure must not hide the original error.
+      await actual.shutdown().catch(() => {});
+      throw err;
+    }
+    // init and fn succeeded: a shutdown failure here is a real failure and must surface.
+    await actual.shutdown();
+    return result;
   } finally {
-    await actual.shutdown().catch(() => {
-      // Cleanup best-effort: a shutdown failure (e.g. init never succeeded) must not mask
-      // whatever error is already propagating from the try block above.
-    });
     await rm(dataDir, { recursive: true, force: true });
   }
 }
