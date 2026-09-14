@@ -1,0 +1,155 @@
+import type { ActualGateway, ImportResult } from '../actual/session.js';
+import type { SyncConfig } from '../config.js';
+import type { Logger } from '../log.js';
+import { maskToken } from '../log.js';
+import { PlaidRequestError } from '../plaid/client.js';
+import { planAccount } from './plan.js';
+import type { AccountPlan, PlaidFetchResult, PlaidTxn } from './types.js';
+import { computeWindow } from './window.js';
+
+export interface SyncDeps {
+  fetchTransactions(accessToken: string, start: string, end: string): Promise<PlaidFetchResult>;
+  gateway: ActualGateway;
+  log: Logger;
+  today: string;
+}
+
+export async function executePlan(gw: ActualGateway, plan: AccountPlan): Promise<ImportResult> {
+  for (const update of plan.updates) {
+    await gw.updateTransaction(update.actualId, update.fields);
+  }
+  let result: ImportResult = { added: [], updated: [], errors: [] };
+  if (plan.imports.length > 0) {
+    result = await gw.importTransactions(plan.actualAccountId, plan.imports);
+  }
+  for (const del of plan.deletes) {
+    await gw.deleteTransaction(del.actualId);
+  }
+  return result;
+}
+
+export function formatSummary(accountName: string, plan: AccountPlan): string {
+  const posted = plan.updates.filter((u) => u.kind === 'posted').length;
+  const changed = plan.updates.filter((u) => u.kind === 'changed').length;
+  return `${accountName}: ${plan.imports.length} added, ${posted} posted, ${changed} amount updated, ${plan.deletes.length} cancelled hold, ${plan.notices.length} skipped`;
+}
+
+function formatCents(cents: number): string {
+  return (cents / 100).toFixed(2);
+}
+
+function logDryRun(log: Logger, name: string, plan: AccountPlan): void {
+  for (const u of plan.updates) {
+    log.info(`[dry run] ${name}: update (${u.kind}) ${u.actualId} ${JSON.stringify(u.fields)}`);
+  }
+  for (const t of plan.imports) {
+    log.info(
+      `[dry run] ${name}: import ${t.date} ${formatCents(t.amount)} ${t.payee_name} (${t.imported_id})`,
+    );
+  }
+  for (const d of plan.deletes) {
+    log.info(`[dry run] ${name}: delete cancelled hold ${d.actualId} (${d.importedId})`);
+  }
+  log.info(`[dry run] ${formatSummary(name, plan)}`);
+}
+
+export async function runSync(cfg: SyncConfig, deps: SyncDeps): Promise<0 | 1> {
+  const { gateway, log } = deps;
+  const window = computeWindow(deps.today, cfg.syncDays);
+  let failed = false;
+  let incomplete = false;
+  const txnsByAccount = new Map<string, PlaidTxn[]>();
+  const covered = new Set<string>();
+
+  log.info(`Syncing Plaid transactions from ${window.start} to ${window.end}`);
+
+  for (const token of cfg.accessTokens) {
+    const masked = maskToken(token);
+    try {
+      const result = await deps.fetchTransactions(token, window.start, window.end);
+      for (const id of result.accountIds) covered.add(id);
+      for (const txn of result.transactions) {
+        covered.add(txn.accountId);
+        const list = txnsByAccount.get(txn.accountId) ?? [];
+        list.push(txn);
+        txnsByAccount.set(txn.accountId, list);
+      }
+      log.debug(`Fetched ${result.transactions.length} Plaid transactions for bank ${masked}`);
+    } catch (err) {
+      incomplete = true;
+      if (err instanceof PlaidRequestError && err.kind === 'relink') {
+        log.error(
+          `Bank ${masked} needs re-authentication: run \`link --update\` with LINK_ACCESS_TOKEN set to this token`,
+        );
+        failed = true;
+      } else if (err instanceof PlaidRequestError && err.kind === 'not-ready') {
+        log.warn(
+          `Bank ${masked} transactions are not ready yet (PRODUCT_NOT_READY); skipping this run`,
+        );
+      } else if (err instanceof PlaidRequestError) {
+        const requestId = err.requestId ? ` (request ${err.requestId})` : '';
+        log.error(`Bank ${masked} failed with ${err.code ?? err.kind}: ${err.message}${requestId}`);
+        failed = true;
+      } else {
+        log.error(`Bank ${masked} failed: ${err instanceof Error ? err.message : String(err)}`);
+        failed = true;
+      }
+    }
+  }
+
+  const mappedPlaidIds = new Set(cfg.accountMap.map((m) => m.plaidAccountId));
+  for (const id of covered) {
+    if (!mappedPlaidIds.has(id)) log.info(`Skipping unmapped Plaid account ${id}`);
+  }
+
+  const actualAccounts = new Map((await gateway.getAccounts()).map((a) => [a.id, a]));
+
+  for (const mapping of cfg.accountMap) {
+    const account = actualAccounts.get(mapping.actualAccountId);
+    if (!account) {
+      log.error(
+        `ACCOUNT_MAP references Actual account ${mapping.actualAccountId} which does not exist in the budget`,
+      );
+      failed = true;
+      continue;
+    }
+    if (!covered.has(mapping.plaidAccountId)) {
+      if (incomplete) {
+        log.debug(`Skipping ${account.name}: its bank was not fetched this run`);
+      } else {
+        log.error(
+          `ACCOUNT_MAP references Plaid account ${mapping.plaidAccountId} not found on any access token`,
+        );
+        failed = true;
+      }
+      continue;
+    }
+
+    // planAccount does no account filtering itself, so only this mapping's Plaid txns and
+    // only this mapping's Actual rows (loaded with the extended lookback window) are passed in.
+    const rows = await gateway.getTransactions(account.id, window.lookbackStart, window.end);
+    const plan = planAccount(
+      account.id,
+      txnsByAccount.get(mapping.plaidAccountId) ?? [],
+      rows,
+      window,
+    );
+    for (const notice of plan.notices) {
+      log.warn(`${account.name}: skipped ${notice.actualId} (${notice.reason}): ${notice.detail}`);
+    }
+
+    if (cfg.dryRun) {
+      logDryRun(log, account.name, plan);
+      continue;
+    }
+
+    const result = await executePlan(gateway, plan);
+    for (const message of result.errors) {
+      log.error(`${account.name}: import error: ${message}`);
+      failed = true;
+    }
+    log.info(formatSummary(account.name, plan));
+  }
+
+  return failed ? 1 : 0;
+}
