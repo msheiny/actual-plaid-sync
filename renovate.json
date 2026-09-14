@@ -1,0 +1,33 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", "helpers:pinGitHubActionDigests"],
+  "pinDigests": true,
+  "mise": {
+    "enabled": true
+  },
+  "packageRules": [
+    {
+      "description": "Only third-party actions are SHA-pinned; actions/* stay on version tags.",
+      "matchManagers": ["github-actions"],
+      "matchPackageNames": ["actions/**"],
+      "pinDigests": false
+    },
+    {
+      "description": "@actual-app/api must match the user's Actual server version (and the e2e actual-server image). Review manually; update the README compatibility table.",
+      "matchPackageNames": ["@actual-app/api", "actualbudget/actual-server"],
+      "groupName": "actual",
+      "automerge": false,
+      "labels": ["actual-api"]
+    },
+    {
+      "description": "Keep Node in lockstep between mise.toml and the Dockerfile base image.",
+      "matchPackageNames": ["node", "docker.io/library/node"],
+      "groupName": "node"
+    },
+    {
+      "description": "pnpm bumps also require updating PNPM_VERSION and both PNPM_SHA256_* checksums in the Dockerfile.",
+      "matchPackageNames": ["pnpm/pnpm", "pnpm"],
+      "automerge": false
+    }
+  ]
+}
