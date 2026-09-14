@@ -38,13 +38,26 @@ export async function bootstrapServer(
   if (body.status !== 'ok') throw new Error(`bootstrap failed: ${body.reason ?? res.status}`);
 }
 
-async function withApi<T>(serverUrl: string, password: string, fn: () => Promise<T>): Promise<T> {
+/**
+ * Runs `fn` against a fresh, logged-in Actual API session and always cleans up: `init` runs inside
+ * the `try` (not before it), so a failure there still reaches the `finally`. `shutdown()` may itself
+ * throw when `init` never succeeded; that failure is swallowed so it never masks the error already
+ * propagating from `try`, and the temp dir removal always runs regardless.
+ */
+export async function withApi<T>(
+  serverUrl: string,
+  password: string,
+  fn: () => Promise<T>,
+): Promise<T> {
   const dataDir = await mkdtemp(join(tmpdir(), 'actual-plaid-sync-e2e-'));
-  await actual.init({ dataDir, serverURL: serverUrl, password, verbose: false });
   try {
+    await actual.init({ dataDir, serverURL: serverUrl, password, verbose: false });
     return await fn();
   } finally {
-    await actual.shutdown();
+    await actual.shutdown().catch(() => {
+      // Cleanup best-effort: a shutdown failure (e.g. init never succeeded) must not mask
+      // whatever error is already propagating from the try block above.
+    });
     await rm(dataDir, { recursive: true, force: true });
   }
 }

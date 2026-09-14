@@ -1,9 +1,11 @@
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import * as actual from '@actual-app/api';
 import { describe, expect, it } from 'vitest';
-import { bootstrapServer, createBudget, readTransactions } from './helpers/actual-server.js';
+import {
+  bootstrapServer,
+  createBudget,
+  readTransactions,
+  withApi,
+} from './helpers/actual-server.js';
 
 const serverUrl = process.env.ACTUAL_E2E_SERVER_URL ?? 'http://localhost:5006';
 const password = process.env.ACTUAL_E2E_PASSWORD ?? 'e2e-password';
@@ -20,9 +22,7 @@ describe('actual-server e2e helpers', () => {
     );
     expect(await readTransactions(serverUrl, password, syncId, accountId)).toEqual([]);
 
-    const dataDir = await mkdtemp(join(tmpdir(), 'actual-plaid-sync-e2e-'));
-    await actual.init({ dataDir, serverURL: serverUrl, password, verbose: false });
-    try {
+    await withApi(serverUrl, password, async () => {
       await actual.downloadBudget(syncId);
       await actual.importTransactions(
         accountId,
@@ -39,10 +39,7 @@ describe('actual-server e2e helpers', () => {
         ],
         { reimportDeleted: false },
       );
-    } finally {
-      await actual.shutdown();
-      await rm(dataDir, { recursive: true, force: true });
-    }
+    });
 
     const rows = await readTransactions(serverUrl, password, syncId, accountId);
     expect(rows.map((r) => [r.importedId, r.amount, r.cleared])).toEqual([
