@@ -1,7 +1,7 @@
 # actual-plaid-sync — Design
 
 Date: 2026-09-13
-Status: Approved design, pending spec review
+Status: Approved (user's Actual server: v26.9.0, matching the pinned API)
 
 ## Goal
 
