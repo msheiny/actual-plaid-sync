@@ -61,6 +61,7 @@ async function runLink(env: NodeJS.ProcessEnv, opts: LinkOptions): Promise<numbe
   const deps = createLinkDeps(client, cfg, mode);
   const server = await startLinkServer({
     mode,
+    plaidEnv: cfg.plaid.env,
     host: cfg.host,
     port: cfg.port,
     deps,

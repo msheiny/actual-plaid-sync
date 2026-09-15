@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { formatTable, plaidAccountRow } from '../commands/accounts.js';
+import type { PlaidEnvName } from '../config.js';
 import { type Logger, maskToken } from '../log.js';
 import type { PlaidAccountInfo } from '../plaid/accounts.js';
 import { renderLinkPage } from './page.js';
@@ -14,6 +15,7 @@ export interface LinkResult {
 
 export interface LinkServerOptions {
   mode: 'create' | 'update';
+  plaidEnv: PlaidEnvName;
   accessToken?: string;
   host: string;
   port: number;
@@ -124,7 +126,7 @@ export async function startLinkServer(opts: LinkServerOptions): Promise<LinkServ
     throw new Error('startLinkServer: accessToken is required in update mode');
   }
   const updateAccessToken = opts.accessToken ?? '';
-  const page = renderLinkPage(mode);
+  const page = renderLinkPage(mode, opts.plaidEnv);
 
   let resolveResult: (result: LinkResult) => void = () => {};
   const result = new Promise<LinkResult>((resolve) => {

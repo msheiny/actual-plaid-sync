@@ -58,6 +58,7 @@ async function start(
 ): Promise<LinkServer> {
   server = await startLinkServer({
     mode,
+    plaidEnv: 'sandbox',
     host: '127.0.0.1',
     port: 0,
     deps,
@@ -142,6 +143,7 @@ describe('startLinkServer', () => {
     await expect(
       startLinkServer({
         mode: 'update',
+        plaidEnv: 'sandbox',
         host: '127.0.0.1',
         port: 0,
         deps: fakeDeps(),

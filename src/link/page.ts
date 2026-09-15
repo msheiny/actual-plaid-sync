@@ -1,3 +1,5 @@
+import type { PlaidEnvName } from '../config.js';
+
 const PLAID_LINK_SCRIPT = 'https://cdn.plaid.com/link/v2/stable/link-initialize.js';
 
 interface PageText {
@@ -110,8 +112,21 @@ button.addEventListener('click', function () {
 });
 `;
 
-export function renderLinkPage(mode: 'create' | 'update'): string {
+// Pinned to the left so it stays readable beside Plaid Link's centered modal.
+const SANDBOX_NOTES = `<aside aria-label="Sandbox test values">
+  <h2>Sandbox test values</h2>
+  <dl>
+    <div><dt>Username</dt><dd><code>user_good</code></dd></div>
+    <div><dt>Password</dt><dd><code>pass_good</code></dd></div>
+    <div><dt>Phone number</dt><dd>Any phone number works</dd></div>
+    <div><dt>Verification code</dt><dd><code>123456</code></dd></div>
+  </dl>
+</aside>
+`;
+
+export function renderLinkPage(mode: 'create' | 'update', plaidEnv: PlaidEnvName): string {
   const text = TEXT[mode];
+  const notes = plaidEnv === 'sandbox' ? SANDBOX_NOTES : '';
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -120,8 +135,19 @@ export function renderLinkPage(mode: 'create' | 'update'): string {
 <title>actual-plaid-sync: ${text.title}</title>
 <style>
   :root { color-scheme: light dark; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
-  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 1rem; box-sizing: border-box; }
-  main { width: 100%; max-width: 32rem; }
+  body { margin: 0; min-height: 100vh; display: flex; }
+  aside { flex: 0 0 15rem; padding: 1.5rem 1.25rem; border-right: 1px solid color-mix(in srgb, currentColor 20%, transparent); }
+  aside h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 1rem; opacity: 0.7; }
+  aside dl { margin: 0; display: flex; flex-direction: column; gap: 1rem; }
+  aside dt { font-size: 0.85rem; opacity: 0.7; }
+  aside dd { margin: 0.2rem 0 0; }
+  aside code { font-size: 1rem; }
+  main { flex: 1; display: grid; place-items: center; padding: 1rem; }
+  .panel { width: 100%; max-width: 32rem; }
+  @media (max-width: 48rem) {
+    body { flex-direction: column; }
+    aside { flex: none; border-right: 0; border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent); }
+  }
   h1 { font-size: 1.5rem; margin: 0 0 0.5rem; }
   p { line-height: 1.5; }
   button { font: inherit; font-size: 1.1rem; padding: 0.75rem 1.5rem; border: 0; border-radius: 0.5rem; background: #0b7a5a; color: #fff; cursor: pointer; }
@@ -132,11 +158,13 @@ export function renderLinkPage(mode: 'create' | 'update'): string {
 </style>
 </head>
 <body>
-<main>
-  <h1>${text.title}</h1>
-  <p>${text.intro}</p>
-  <button id="action" type="button">${text.button}</button>
-  <p id="status" role="status" aria-live="polite"></p>
+${notes}<main>
+  <div class="panel">
+    <h1>${text.title}</h1>
+    <p>${text.intro}</p>
+    <button id="action" type="button">${text.button}</button>
+    <p id="status" role="status" aria-live="polite"></p>
+  </div>
 </main>
 <script src="${PLAID_LINK_SCRIPT}"></script>
 <script>${PAGE_SCRIPT}</script>

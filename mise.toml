@@ -1,6 +1,22 @@
+# Mask only real secrets in task output. Redacting all of .env also masks plain values such as
+# PLAID_ENV=sandbox wherever they appear, which corrupts printed access tokens (access-[redacted]-...).
+# Must stay above the first [table] header, or TOML nests it inside that table.
+redactions = [
+  "PLAID_SECRET",
+  "PLAID_SANDBOX_SECRET",
+  "PLAID_ACCESS_TOKENS",
+  "LINK_ACCESS_TOKEN",
+  "ACTUAL_PASSWORD",
+  "ACTUAL_ENCRYPTION_PASSWORD",
+]
+
 [tools]
 node = "24.21.0"
 "aqua:pnpm/pnpm" = "12.4.1"
+
+[env]
+# Local settings and secrets; copy .env.example to start. Skipped when the file is missing.
+_.file = ".env"
 
 [tasks.install]
 description = "Install dependencies from pnpm-lock.yaml"
@@ -8,6 +24,7 @@ run = "pnpm install"
 
 [tasks.build]
 description = "Compile src/ to dist/"
+depends = ["install"]
 run = "pnpm run build"
 
 [tasks.typecheck]
