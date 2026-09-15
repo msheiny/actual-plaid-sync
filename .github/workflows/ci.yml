@@ -54,6 +54,10 @@ jobs:
   e2e:
     runs-on: ubuntu-24.04
     needs: check
+    # Optional: GitHub repo Settings -> Secrets and variables -> Actions -> New repository secret.
+    # From Plaid Dashboard -> Developers -> Keys: use your client ID and Sandbox secret.
+    # No production access tokens or real Actual credentials are needed. Without these secrets,
+    # the end-to-end test skips; lint, typecheck, unit tests, and Docker checks still run.
     env:
       PLAID_SANDBOX_CLIENT_ID: ${{ secrets.PLAID_SANDBOX_CLIENT_ID }}
       PLAID_SANDBOX_SECRET: ${{ secrets.PLAID_SANDBOX_SECRET }}

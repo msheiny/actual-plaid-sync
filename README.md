@@ -291,6 +291,17 @@ mise run actual:stop
 
 Stop any previous test server before starting this one. Without the two Sandbox variables, the sync test suite is skipped. CI runs it when repository secrets of the same names are available.
 
+### Optional GitHub CI secrets
+
+In your GitHub repository, open **Settings → Secrets and variables → Actions → New repository secret** and add these values from **Plaid Dashboard → Developers → Keys**:
+
+| Repository secret | Value |
+| --- | --- |
+| `PLAID_SANDBOX_CLIENT_ID` | Your Plaid client ID |
+| `PLAID_SANDBOX_SECRET` | Your Plaid **Sandbox** secret |
+
+CI creates a disposable Actual server with the test password in the workflow and generates its own Sandbox access token. Production credentials, existing bank access tokens, and your real Actual server credentials are unnecessary. Without these two secrets, the end-to-end test skips; lint, typecheck, unit tests, and Docker checks still run. Fork pull requests also skip this test because GitHub does not provide repository secrets to them.
+
 ## Releasing
 
 Create and push a version tag, using the version being released:
