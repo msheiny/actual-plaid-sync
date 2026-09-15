@@ -1,0 +1,72 @@
+# Mask only real secrets in task output. Redacting all of .env also masks plain values such as
+# PLAID_ENV=sandbox wherever they appear, which corrupts printed access tokens (access-[redacted]-...).
+# Must stay above the first [table] header, or TOML nests it inside that table.
+redactions = [
+  "PLAID_SECRET",
+  "PLAID_SANDBOX_SECRET",
+  "PLAID_ACCESS_TOKENS",
+  "LINK_ACCESS_TOKEN",
+  "ACTUAL_PASSWORD",
+  "ACTUAL_ENCRYPTION_PASSWORD",
+]
+
+[tools]
+node = "24.21.0"
+"aqua:pnpm/pnpm" = "12.4.1"
+
+[env]
+# Local settings and secrets; copy .env.example to start. Skipped when the file is missing.
+_.file = ".env"
+
+[tasks.install]
+description = "Install dependencies from pnpm-lock.yaml"
+run = "pnpm install"
+
+[tasks.build]
+description = "Compile src/ to dist/"
+depends = ["install"]
+run = "pnpm run build"
+
+[tasks.typecheck]
+description = "Type-check src/ and test/"
+run = "pnpm run typecheck"
+
+[tasks.test]
+description = "Run unit tests"
+run = "pnpm run test"
+
+[tasks.lint]
+description = "Lint and format-check with Biome"
+run = "pnpm run lint"
+
+[tasks.check]
+description = "Lint, type-check, and test"
+depends = ["lint", "typecheck", "test"]
+
+[tasks.link]
+description = "Connect a bank with Plaid Link (pass extra flags after --)"
+depends = ["build"]
+run = "node dist/cli.js link"
+
+[tasks.accounts]
+description = "List Plaid and Actual accounts and write accounts.yaml"
+depends = ["build"]
+run = "node dist/cli.js accounts"
+
+[tasks.sync]
+description = "Sync Plaid transactions into Actual"
+depends = ["build"]
+run = "node dist/cli.js sync"
+
+[tasks."actual:start"]
+description = "Start a throwaway Actual server on localhost:5006 (its data is deleted on stop)"
+# Same image as the e2e job in .github/workflows/ci.yml; Renovate bumps both with @actual-app/api.
+run = "docker run -d --rm --name actual-plaid-sync-actual -p 127.0.0.1:5006:5006 actualbudget/actual-server:26.9.0@sha256:552beab3dec8c93d46b8b9245612d63c3f123b8a45063a474f53e229b17621d3"
+
+[tasks."actual:stop"]
+description = "Stop and delete the throwaway Actual server"
+run = "docker stop actual-plaid-sync-actual"
+
+[tasks.e2e]
+description = "End-to-end sync test: Plaid Sandbox + actual-server at ACTUAL_E2E_SERVER_URL (sync suite needs PLAID_SANDBOX_CLIENT_ID/PLAID_SANDBOX_SECRET)"
+run = "pnpm exec vitest run --config vitest.e2e.config.ts"
