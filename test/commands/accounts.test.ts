@@ -1,3 +1,6 @@
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { ActualAccountInfo, ActualGateway } from '../../src/actual/session.js';
 import {
@@ -230,6 +233,7 @@ function gatewayWith(accounts: ActualAccountInfo[]): ActualGateway {
 }
 
 const baseConfig: AccountsConfig = {
+  accountsFile: 'accounts.yaml',
   plaid: { clientId: 'id', secret: 'secret', env: 'sandbox' },
   actual: { serverUrl: 'http://actual', password: 'pw', syncId: 'sync' },
   accessTokens: ['access-sandbox-aaaa1111'],
@@ -237,9 +241,49 @@ const baseConfig: AccountsConfig = {
 };
 
 describe('runAccounts', () => {
+  it('writes editable YAML to the configured path and preserves it on reruns', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'accounts-test-'));
+    const accountsFile = join(dir, 'custom.yaml');
+    const out: string[] = [];
+    const deps = {
+      fetchAccounts: async () => [plaid({ accountId: 'p1', name: 'Checking' })],
+      gateway: gatewayWith([actualAcct({ id: 'a1', name: 'Checking' })]),
+      log: createLogger('error', () => {}),
+      print: (line: string) => out.push(line),
+    };
+    try {
+      expect(await runAccounts({ ...baseConfig, accountsFile }, deps)).toBe(0);
+      const saved = await readFile(accountsFile, 'utf8');
+      expect(parseAccountsFile(saved, accountsFile)).toEqual({
+        accounts: [{ plaid: { id: 'p1' }, actual: 'Checking' }],
+        problems: [],
+      });
+      expect(
+        await runAccounts(
+          { ...baseConfig, accountsFile },
+          {
+            ...deps,
+            gateway: gatewayWith([]),
+          },
+        ),
+      ).toBe(0);
+      expect(await readFile(accountsFile, 'utf8')).toBe(saved);
+      expect(out).toContain(`Kept existing ${accountsFile}; suggested YAML is shown above.`);
+      expect(
+        await runAccounts(
+          { ...baseConfig, accountsFile: join(dir, 'missing', 'accounts.yaml') },
+          deps,
+        ),
+      ).toBe(1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('prints Plaid and Actual tables and a suggested accounts.yaml', async () => {
     const out: string[] = [];
     const code = await runAccounts(baseConfig, {
+      writeAccountsFile: async () => {},
       fetchAccounts: async () => [
         plaid({ accountId: 'plaid-1', name: 'Plaid Checking', mask: '0000' }),
       ],
@@ -269,6 +313,9 @@ describe('runAccounts', () => {
       'accounts:',
       '  - plaid: "0000"',
       '    actual: Checking 0000 # Plaid: Plaid Checking',
+      '',
+      'Wrote accounts.yaml; review and edit it before syncing.',
+      'accounts.yaml is git-ignored in this checkout, so it will not appear in git status.',
     ]);
     expect(out.join('\n')).not.toContain('access-sandbox-aaaa1111');
   });
@@ -279,6 +326,7 @@ describe('runAccounts', () => {
     const code = await runAccounts(
       { ...baseConfig, accessTokens: ['access-bad-2222', 'access-good-3333'] },
       {
+        writeAccountsFile: async () => {},
         fetchAccounts: async (token) => {
           if (token === 'access-bad-2222') {
             throw new PlaidRequestError(

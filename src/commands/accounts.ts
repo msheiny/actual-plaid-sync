@@ -1,3 +1,4 @@
+import { writeFile } from 'node:fs/promises';
 import { Document, isMap, isScalar, isSeq } from 'yaml';
 import type { ActualAccountInfo, ActualGateway } from '../actual/session.js';
 import type { AccountsConfig } from '../config.js';
@@ -7,6 +8,7 @@ import type { PlaidAccountInfo } from '../plaid/accounts.js';
 import { PlaidRequestError } from '../plaid/client.js';
 
 export interface AccountsDeps {
+  writeAccountsFile?: (path: string, content: string) => Promise<void>;
   fetchAccounts(accessToken: string): Promise<PlaidAccountInfo[]>;
   gateway: ActualGateway;
   log: Logger;
@@ -166,7 +168,25 @@ export async function runAccounts(cfg: AccountsConfig, deps: AccountsDeps): Prom
   if (plaidAccounts.length > 0) {
     const suggestions = suggestAccounts(plaidAccounts, actualAccounts);
     print('Suggested accounts.yaml (review before use):');
-    for (const l of formatAccountsYaml(suggestions, plaidAccounts)) print(l);
+    const yaml = formatAccountsYaml(suggestions, plaidAccounts);
+    for (const l of yaml) print(l);
+    print('');
+    const save =
+      deps.writeAccountsFile ?? ((path, content) => writeFile(path, content, { flag: 'wx' }));
+    try {
+      await save(cfg.accountsFile, `${yaml.join('\n')}\n`);
+      print(`Wrote ${cfg.accountsFile}; review and edit it before syncing.`);
+    } catch (err) {
+      if (err instanceof Error && 'code' in err && err.code === 'EEXIST') {
+        print(`Kept existing ${cfg.accountsFile}; suggested YAML is shown above.`);
+      } else {
+        log.error(`Writing ${cfg.accountsFile} failed: ${describeError(err)}`);
+        failed = true;
+      }
+    }
+    if (cfg.accountsFile === 'accounts.yaml') {
+      print('accounts.yaml is git-ignored in this checkout, so it will not appear in git status.');
+    }
     if (suggestions.every((s) => s.actual === null)) {
       print('');
       print(

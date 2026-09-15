@@ -40,6 +40,7 @@ export interface SyncConfig {
 }
 
 export interface AccountsConfig {
+  accountsFile: string;
   plaid: PlaidConfig;
   actual: ActualConfig;
   accessTokens: string[];
@@ -183,6 +184,7 @@ const syncSchema = z.object({
 });
 
 const accountsSchema = z.object({
+  ACCOUNTS_FILE: z.string().default(DEFAULT_ACCOUNTS_FILE),
   ...plaidShape,
   PLAID_ACCESS_TOKENS: requiredList,
   ...actualShape,
@@ -435,6 +437,7 @@ export function loadAccountsConfig(env: NodeJS.ProcessEnv): AccountsConfig {
     plaid: toPlaidConfig(parsed),
     actual: toActualConfig(parsed),
     accessTokens: parsed.PLAID_ACCESS_TOKENS,
+    accountsFile: parsed.ACCOUNTS_FILE,
     logLevel: parsed.LOG_LEVEL,
   };
 }

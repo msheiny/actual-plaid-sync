@@ -420,6 +420,7 @@ describe('loadAccountsConfig', () => {
     });
 
     expect(cfg).toEqual({
+      accountsFile: '/does/not/exist.yaml',
       plaid: { clientId: 'client-123', secret: 'secret-456', env: 'sandbox' },
       actual: {
         serverUrl: 'https://actual.example.com',
