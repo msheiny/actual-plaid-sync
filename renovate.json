@@ -5,6 +5,17 @@
   "mise": {
     "enabled": true
   },
+  "customManagers": [
+    {
+      "description": "Docker image pinned inside mise tasks (the mise manager only reads [tools]).",
+      "customType": "regex",
+      "managerFilePatterns": ["/^mise\\.toml$/"],
+      "matchStrings": [
+        "(?<depName>actualbudget/actual-server):(?<currentValue>[^@\\s\"]+)@(?<currentDigest>sha256:[a-f0-9]{64})"
+      ],
+      "datasourceTemplate": "docker"
+    }
+  ],
   "packageRules": [
     {
       "description": "Only third-party actions are SHA-pinned; actions/* stay on version tags.",
