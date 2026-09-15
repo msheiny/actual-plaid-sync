@@ -18,6 +18,17 @@ function rawTxn(id: string, overrides: Record<string, unknown> = {}) {
   };
 }
 
+function rawAccount(id: string) {
+  return {
+    account_id: id,
+    name: 'Plaid Checking',
+    official_name: null,
+    mask: '0000',
+    type: 'depository',
+    subtype: 'checking',
+  };
+}
+
 function fakeClient() {
   const transactionsGet = vi.fn();
   const client = { transactionsGet, accountsGet: vi.fn() } as unknown as PlaidApi;
@@ -27,7 +38,7 @@ function fakeClient() {
 describe('fetchTransactions', () => {
   it('pages with count/offset until total_transactions is reached', async () => {
     const { client, transactionsGet } = fakeClient();
-    const accounts = [{ account_id: 'acc-1' }, { account_id: 'acc-2' }];
+    const accounts = [rawAccount('acc-1'), rawAccount('acc-2')];
     const page1 = Array.from({ length: 500 }, (_, i) => rawTxn(`t${i}`));
     const page2 = [rawTxn('t500'), rawTxn('t501')];
     transactionsGet
@@ -52,24 +63,36 @@ describe('fetchTransactions', () => {
       options: { count: 500, offset: 500 },
     });
     expect(result.transactions).toHaveLength(502);
-    expect(result.accountIds).toEqual(['acc-1', 'acc-2']);
+    expect(result.accounts.map((a) => a.accountId)).toEqual(['acc-1', 'acc-2']);
   });
 
-  it('returns account ids even when there are no transactions', async () => {
+  it('returns accounts even when there are no transactions', async () => {
     const { client, transactionsGet } = fakeClient();
     transactionsGet.mockResolvedValueOnce({
-      data: { accounts: [{ account_id: 'acc-9' }], transactions: [], total_transactions: 0 },
+      data: { accounts: [rawAccount('acc-9')], transactions: [], total_transactions: 0 },
     });
     const result = await fetchTransactions(client, 'tok', '2026-08-14', '2026-09-13');
     expect(transactionsGet).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({ accountIds: ['acc-9'], transactions: [] });
+    expect(result).toEqual({
+      accounts: [
+        {
+          accountId: 'acc-9',
+          name: 'Plaid Checking',
+          officialName: null,
+          mask: '0000',
+          type: 'depository',
+          subtype: 'checking',
+        },
+      ],
+      transactions: [],
+    });
   });
 
   it('maps Plaid fields to PlaidTxn', async () => {
     const { client, transactionsGet } = fakeClient();
     transactionsGet.mockResolvedValueOnce({
       data: {
-        accounts: [{ account_id: 'acc-1' }],
+        accounts: [rawAccount('acc-1')],
         transactions: [
           rawTxn('posted-1', { pending_transaction_id: 'pending-1' }),
           rawTxn('pending-2', { pending: true, authorized_date: null, merchant_name: undefined }),

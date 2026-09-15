@@ -1,5 +1,6 @@
 import type { PlaidApi, Transaction } from 'plaid';
 import type { PlaidFetchResult, PlaidTxn } from '../sync/types.js';
+import { type PlaidAccountInfo, toPlaidAccountInfo } from './accounts.js';
 import { withRetry } from './client.js';
 
 const PAGE_SIZE = 500;
@@ -25,7 +26,7 @@ export async function fetchTransactions(
   end: string,
 ): Promise<PlaidFetchResult> {
   const transactions: PlaidTxn[] = [];
-  let accountIds: string[] = [];
+  let accounts: PlaidAccountInfo[] = [];
   let offset = 0;
   for (;;) {
     const response = await withRetry(() =>
@@ -37,10 +38,10 @@ export async function fetchTransactions(
       }),
     );
     const data = response.data;
-    if (offset === 0) accountIds = data.accounts.map((a) => a.account_id);
+    if (offset === 0) accounts = data.accounts.map(toPlaidAccountInfo);
     transactions.push(...data.transactions.map(toPlaidTxn));
     offset += data.transactions.length;
     if (data.transactions.length === 0 || offset >= data.total_transactions) break;
   }
-  return { accountIds, transactions };
+  return { accounts, transactions };
 }

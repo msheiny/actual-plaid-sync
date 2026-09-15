@@ -15,8 +15,6 @@ stringData:
   PLAID_ENV: production
   # Comma-separated, one access token per bank login (output of `link`).
   PLAID_ACCESS_TOKENS: change-me
-  # Comma-separated plaidAccountId:actualAccountId pairs (output of `accounts`).
-  ACCOUNT_MAP: change-me
   ACTUAL_SERVER_URL: change-me
   ACTUAL_PASSWORD: change-me
   # Actual: Settings -> Advanced -> Sync ID
@@ -26,6 +24,23 @@ stringData:
   SYNC_DAYS: "30"
   DRY_RUN: "false"
   LOG_LEVEL: info
+---
+# Which Plaid accounts sync into which Actual accounts (start from the output of `accounts`).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: actual-plaid-sync-accounts
+  labels:
+    app.kubernetes.io/name: actual-plaid-sync
+data:
+  accounts.yaml: |
+    accounts:
+      # Plaid mask (last 4 digits), quoted -> Actual account name
+      - plaid: "change-me"
+        actual: change-me
+      # Pin the Plaid account id when two accounts share a mask or one has no mask
+      - plaid: change-me
+        actual: change-me
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -65,6 +80,9 @@ spec:
               envFrom:
                 - secretRef:
                     name: actual-plaid-sync
+              env:
+                - name: ACCOUNTS_FILE
+                  value: /config/accounts.yaml
               securityContext:
                 readOnlyRootFilesystem: true
                 allowPrivilegeEscalation: false
@@ -79,7 +97,14 @@ spec:
               volumeMounts:
                 - name: tmp
                   mountPath: /tmp
+                # Mounted as a directory (not subPath) so ConfigMap edits reach later runs.
+                - name: accounts
+                  mountPath: /config
+                  readOnly: true
           volumes:
             - name: tmp
               emptyDir:
                 sizeLimit: 256Mi
+            - name: accounts
+              configMap:
+                name: actual-plaid-sync-accounts

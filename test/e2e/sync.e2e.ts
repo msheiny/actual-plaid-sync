@@ -1,7 +1,9 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createPlaidClient } from '../../src/plaid/client.js';
 import { addDays, todayUtc } from '../../src/sync/window.js';
 import { bootstrapServer, createBudget, readTransactions } from './helpers/actual-server.js';
@@ -35,6 +37,11 @@ describe.skipIf(!clientId || !secret)('sync end-to-end (Plaid Sandbox -> actual-
   let syncId: string;
   let accountId: string;
   let plaidTxnIds: string[];
+  let configDir: string | undefined;
+
+  afterAll(() => {
+    if (configDir) rmSync(configDir, { recursive: true, force: true });
+  });
 
   beforeAll(async () => {
     expect(existsSync(CLI), `${CLI} missing: run \`mise run build\` first`).toBe(true);
@@ -53,12 +60,22 @@ describe.skipIf(!clientId || !secret)('sync end-to-end (Plaid Sandbox -> actual-
     );
     plaidTxnIds = sandbox.transactionIds;
 
+    // spawnSync runs the CLI without a cwd, so the accounts file is passed by absolute path. The
+    // helper only reports the Plaid account id, so the entry pins it; createBudget names the
+    // Actual account "E2E Checking".
+    configDir = mkdtempSync(join(tmpdir(), 'actual-plaid-sync-e2e-'));
+    const accountsFile = join(configDir, 'accounts.yaml');
+    writeFileSync(
+      accountsFile,
+      `accounts:\n  - plaid: ${sandbox.plaidAccountId}\n    actual: E2E Checking\n`,
+    );
+
     syncEnv = {
       PLAID_CLIENT_ID: clientId,
       PLAID_SECRET: secret,
       PLAID_ENV: 'sandbox',
       PLAID_ACCESS_TOKENS: accessToken,
-      ACCOUNT_MAP: `${sandbox.plaidAccountId}:${accountId}`,
+      ACCOUNTS_FILE: accountsFile,
       ACTUAL_SERVER_URL: serverUrl,
       ACTUAL_PASSWORD: password,
       ACTUAL_SYNC_ID: syncId,

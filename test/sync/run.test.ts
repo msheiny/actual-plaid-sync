@@ -3,6 +3,7 @@ import type { ActualAccountInfo, ActualGateway, ImportResult } from '../../src/a
 import { ActualError } from '../../src/actual/session.js';
 import type { SyncConfig } from '../../src/config.js';
 import { createLogger } from '../../src/log.js';
+import type { PlaidAccountInfo } from '../../src/plaid/accounts.js';
 import { PlaidRequestError } from '../../src/plaid/client.js';
 import { executePlan, formatSummary, runSync } from '../../src/sync/run.js';
 import type {
@@ -68,6 +69,10 @@ function plaidTxn(overrides: Partial<PlaidTxn> & Pick<PlaidTxn, 'transactionId'>
   };
 }
 
+function plaidAccount(accountId: string, name: string, mask: string | null): PlaidAccountInfo {
+  return { accountId, name, mask, officialName: null, type: 'depository', subtype: 'checking' };
+}
+
 function actualRow(overrides: Partial<ActualTxn> & Pick<ActualTxn, 'id'>): ActualTxn {
   return {
     account: 'actual-chk',
@@ -86,7 +91,8 @@ function config(overrides: Partial<SyncConfig> = {}): SyncConfig {
     plaid: { clientId: 'id', secret: 'secret', env: 'sandbox' },
     actual: { serverUrl: 'http://actual', password: 'pw', syncId: 'sync' },
     accessTokens: ['access-good-1111'],
-    accountMap: [{ plaidAccountId: 'plaid-chk', actualAccountId: 'actual-chk' }],
+    accountsFile: 'accounts.yaml',
+    accounts: [{ plaid: { id: 'plaid-chk' }, actual: 'Chase Checking' }],
     syncDays: 30,
     dryRun: false,
     logLevel: 'debug',
@@ -114,7 +120,7 @@ function scenario() {
     ]),
   );
   const good: PlaidFetchResult = {
-    accountIds: ['plaid-chk'],
+    accounts: [plaidAccount('plaid-chk', 'Plaid Checking', '0000')],
     transactions: [
       plaidTxn({
         transactionId: 'post-1',
@@ -289,9 +295,9 @@ describe('runSync', () => {
     const code = await runSync(
       config({
         accessTokens: ['access-bad-9999', 'access-good-1111'],
-        accountMap: [
-          { plaidAccountId: 'plaid-card', actualAccountId: 'actual-card' },
-          { plaidAccountId: 'plaid-chk', actualAccountId: 'actual-chk' },
+        accounts: [
+          { plaid: { id: 'plaid-card' }, actual: 'Amex' },
+          { plaid: { id: 'plaid-chk' }, actual: 'Chase Checking' },
         ],
       }),
       {
@@ -311,7 +317,8 @@ describe('runSync', () => {
       ),
     ).toBe(true);
     expect(has('access-bad-9999')).toBe(false);
-    expect(has('not found on any access token')).toBe(false);
+    expect(has('on any access token')).toBe(false);
+    expect(has('(plaid id plaid-card → Amex): skipped')).toBe(true);
     expect(has('Chase Checking: 1 added')).toBe(true);
     expect(gateway.getTransactionsCalls.some((c) => c.accountId === 'actual-card')).toBe(false);
     expect(gateway.calls).not.toContain('delete card-row-1');
@@ -334,9 +341,9 @@ describe('runSync', () => {
     const code = await runSync(
       config({
         accessTokens: ['access-new-2222', 'access-good-1111'],
-        accountMap: [
-          { plaidAccountId: 'plaid-card', actualAccountId: 'actual-card' },
-          { plaidAccountId: 'plaid-chk', actualAccountId: 'actual-chk' },
+        accounts: [
+          { plaid: { id: 'plaid-card' }, actual: 'Amex' },
+          { plaid: { id: 'plaid-chk' }, actual: 'Chase Checking' },
         ],
       }),
       {
@@ -380,37 +387,80 @@ describe('runSync', () => {
       gateway,
       log,
       today: TODAY,
-      fetchTransactions: async () => ({ ...good, accountIds: ['plaid-chk', 'plaid-savings'] }),
+      fetchTransactions: async () => ({
+        ...good,
+        accounts: [...good.accounts, plaidAccount('plaid-savings', 'Plaid Saving', '1111')],
+      }),
     });
     expect(code).toBe(0);
-    expect(has('INFO Skipping unmapped Plaid account plaid-savings')).toBe(true);
-    expect(has('Skipping unmapped Plaid account plaid-chk')).toBe(false);
+    expect(has('INFO Skipping unmapped Plaid account Plaid Saving (…1111)')).toBe(true);
+    expect(has('Skipping unmapped Plaid account Plaid Checking')).toBe(false);
   });
 
-  it('returns 1 when ACCOUNT_MAP names an Actual account that does not exist', async () => {
+  it('returns 1 when an entry names an Actual account that does not exist', async () => {
     const { gateway, good } = scenario();
     const { log, has } = logSink();
     const code = await runSync(
-      config({ accountMap: [{ plaidAccountId: 'plaid-chk', actualAccountId: 'actual-missing' }] }),
-      { gateway, log, today: TODAY, fetchTransactions: async () => good },
-    );
-    expect(code).toBe(1);
-    expect(has('actual-missing')).toBe(true);
-    expect(gateway.calls).toEqual([]);
-  });
-
-  it('returns 1 when ACCOUNT_MAP names a Plaid account no token returned', async () => {
-    const { gateway, good } = scenario();
-    const { log, has } = logSink();
-    const code = await runSync(
-      config({ accountMap: [{ plaidAccountId: 'plaid-ghost', actualAccountId: 'actual-chk' }] }),
+      config({ accounts: [{ plaid: { id: 'plaid-chk' }, actual: 'Missing Account' }] }),
       { gateway, log, today: TODAY, fetchTransactions: async () => good },
     );
     expect(code).toBe(1);
     expect(
-      has('ACCOUNT_MAP references Plaid account plaid-ghost not found on any access token'),
+      has(
+        'ERROR accounts.yaml entry 1 (plaid id plaid-chk → Missing Account): no open Actual account named "Missing Account"',
+      ),
     ).toBe(true);
     expect(gateway.calls).toEqual([]);
+  });
+
+  it('returns 1 when an entry names a Plaid account no token returned', async () => {
+    const { gateway, good } = scenario();
+    const { log, has } = logSink();
+    const code = await runSync(
+      config({ accounts: [{ plaid: { mask: '9999' }, actual: 'Chase Checking' }] }),
+      { gateway, log, today: TODAY, fetchTransactions: async () => good },
+    );
+    expect(code).toBe(1);
+    expect(
+      has(
+        'ERROR accounts.yaml entry 1 (plaid 9999 → Chase Checking): no Plaid account with mask 9999 on any access token',
+      ),
+    ).toBe(true);
+    expect(gateway.calls).toEqual([]);
+  });
+
+  it('resolves masks across every token and still syncs good entries when one is ambiguous', async () => {
+    const { gateway, good } = scenario();
+    gateway.accounts.push({ id: 'actual-card', name: 'Amex', closed: false, offbudget: false });
+    const { log, has } = logSink();
+    const code = await runSync(
+      config({
+        accessTokens: ['access-good-1111', 'access-card-2222'],
+        accounts: [
+          { plaid: { mask: '0000' }, actual: 'Chase Checking' },
+          { plaid: { mask: '5555' }, actual: 'Amex' },
+        ],
+      }),
+      {
+        gateway,
+        log,
+        today: TODAY,
+        fetchTransactions: async (token) =>
+          token === 'access-good-1111'
+            ? good
+            : {
+                accounts: [
+                  plaidAccount('plaid-card', 'Card', '5555'),
+                  plaidAccount('plaid-card-2', 'Card 2', '5555'),
+                ],
+                transactions: [],
+              },
+      },
+    );
+    expect(code).toBe(1);
+    expect(has('(plaid 5555 → Amex): mask 5555 matches 2 Plaid accounts')).toBe(true);
+    expect(has('Chase Checking: 1 added')).toBe(true);
+    expect(gateway.getTransactionsCalls.some((c) => c.accountId === 'actual-card')).toBe(false);
   });
 
   it('returns 1 and logs each import error', async () => {
@@ -450,7 +500,7 @@ describe('runSync', () => {
   });
 
   // Controller review, fix round 1, finding 1: a gateway write rejecting for one account must
-  // not abort later accounts in ACCOUNT_MAP, and must not throw out of runSync.
+  // not abort later entries in the accounts file, and must not throw out of runSync.
   it('logs an ActualError with its hint for one account, still applies the other, and returns 1', async () => {
     const gateway = new FakeGateway(
       [
@@ -480,9 +530,9 @@ describe('runSync', () => {
     const { log, has } = logSink();
     const code = await runSync(
       config({
-        accountMap: [
-          { plaidAccountId: 'plaid-a', actualAccountId: 'actual-a' },
-          { plaidAccountId: 'plaid-b', actualAccountId: 'actual-b' },
+        accounts: [
+          { plaid: { mask: '1111' }, actual: 'Account A' },
+          { plaid: { id: 'plaid-b' }, actual: 'account b' },
         ],
       }),
       {
@@ -490,7 +540,10 @@ describe('runSync', () => {
         log,
         today: TODAY,
         fetchTransactions: async () => ({
-          accountIds: ['plaid-a', 'plaid-b'],
+          accounts: [
+            plaidAccount('plaid-a', 'Plaid A', '1111'),
+            plaidAccount('plaid-b', 'Plaid B', '2222'),
+          ],
           transactions: [
             plaidTxn({
               transactionId: 'pend-a',
@@ -531,9 +584,9 @@ describe('runSync', () => {
     const { log, has } = logSink();
     const code = await runSync(
       config({
-        accountMap: [
-          { plaidAccountId: 'plaid-a', actualAccountId: 'actual-a' },
-          { plaidAccountId: 'plaid-b', actualAccountId: 'actual-b' },
+        accounts: [
+          { plaid: { mask: '1111' }, actual: 'Account A' },
+          { plaid: { id: 'plaid-b' }, actual: 'account b' },
         ],
       }),
       {
@@ -541,7 +594,10 @@ describe('runSync', () => {
         log,
         today: TODAY,
         fetchTransactions: async () => ({
-          accountIds: ['plaid-a', 'plaid-b'],
+          accounts: [
+            plaidAccount('plaid-a', 'Plaid A', '1111'),
+            plaidAccount('plaid-b', 'Plaid B', '2222'),
+          ],
           transactions: [
             plaidTxn({
               transactionId: 'new-b',
@@ -574,7 +630,10 @@ describe('runSync', () => {
       log,
       today: TODAY,
       fetchTransactions: async () => ({
-        accountIds: ['plaid-chk', 'plaid-savings'],
+        accounts: [
+          plaidAccount('plaid-chk', 'Plaid Checking', '0000'),
+          plaidAccount('plaid-savings', 'Plaid Saving', '1111'),
+        ],
         transactions: [
           plaidTxn({ transactionId: 'chk-1', accountId: 'plaid-chk', amount: 5 }),
           plaidTxn({ transactionId: 'savings-1', accountId: 'plaid-savings', amount: 999 }),

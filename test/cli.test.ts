@@ -1,4 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   withBudget: vi.fn(),
@@ -23,12 +26,17 @@ vi.mock('../src/link/server.js', async (importOriginal) => {
   return { ...actual, startLinkServer: mocks.startLinkServer };
 });
 
+const accountsDir = mkdtempSync(join(tmpdir(), 'actual-plaid-sync-cli-test-'));
+const accountsFile = join(accountsDir, 'accounts.yaml');
+writeFileSync(accountsFile, 'accounts:\n  - plaid: "1234"\n    actual: Checking\n');
+afterAll(() => rmSync(accountsDir, { recursive: true, force: true }));
+
 const SYNC_ENV: NodeJS.ProcessEnv = {
   PLAID_CLIENT_ID: 'client-id',
   PLAID_SECRET: 'secret',
   PLAID_ENV: 'sandbox',
   PLAID_ACCESS_TOKENS: 'access-sandbox-1',
-  ACCOUNT_MAP: 'plaid-acc-1:actual-acc-1',
+  ACCOUNTS_FILE: accountsFile,
   ACTUAL_SERVER_URL: 'http://actual.example.test',
   ACTUAL_PASSWORD: 'password',
   ACTUAL_SYNC_ID: '00000000-0000-4000-8000-000000000000',
@@ -87,6 +95,13 @@ describe('main', () => {
     const err = stderr.join('');
     expect(err).toContain('Configuration error:');
     expect(err).toContain('PLAID_CLIENT_ID');
+    expect(mocks.withBudget).not.toHaveBeenCalled();
+  });
+
+  it('exits 2 and names the accounts file when it cannot be read', async () => {
+    const missing = join(accountsDir, 'missing.yaml');
+    await expect(main(['sync'], { ...SYNC_ENV, ACCOUNTS_FILE: missing })).resolves.toBe(2);
+    expect(stderr.join('')).toContain(`  - ${missing}: cannot read file (ENOENT)\n`);
     expect(mocks.withBudget).not.toHaveBeenCalled();
   });
 
@@ -245,10 +260,11 @@ describe('main', () => {
       expect.any(Function),
     );
     const [cfg, deps] = mocks.runSync.mock.calls[0] as [
-      { accessTokens: string[] },
+      { accessTokens: string[]; accounts: unknown[] },
       Record<string, unknown>,
     ];
     expect(cfg.accessTokens).toEqual(['access-sandbox-1']);
+    expect(cfg.accounts).toEqual([{ plaid: { mask: '1234' }, actual: 'Checking' }]);
     expect(deps.gateway).toBe(gateway);
     expect(deps.today).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(typeof deps.fetchTransactions).toBe('function');

@@ -3,8 +3,10 @@ import { ActualError } from '../actual/session.js';
 import type { SyncConfig } from '../config.js';
 import type { Logger } from '../log.js';
 import { maskToken } from '../log.js';
+import type { PlaidAccountInfo } from '../plaid/accounts.js';
 import { PlaidRequestError } from '../plaid/client.js';
 import { planAccount } from './plan.js';
+import { describePlaidAccount, resolveAccounts } from './resolve.js';
 import type { AccountPlan, PlaidFetchResult, PlaidTxn } from './types.js';
 import { computeWindow } from './window.js';
 
@@ -68,7 +70,7 @@ export async function runSync(cfg: SyncConfig, deps: SyncDeps): Promise<0 | 1> {
   let failed = false;
   let incomplete = false;
   const txnsByAccount = new Map<string, PlaidTxn[]>();
-  const covered = new Set<string>();
+  const plaidAccounts: PlaidAccountInfo[] = [];
 
   log.info(`Syncing Plaid transactions from ${window.start} to ${window.end}`);
 
@@ -76,9 +78,8 @@ export async function runSync(cfg: SyncConfig, deps: SyncDeps): Promise<0 | 1> {
     const masked = maskToken(token);
     try {
       const result = await deps.fetchTransactions(token, window.start, window.end);
-      for (const id of result.accountIds) covered.add(id);
+      plaidAccounts.push(...result.accounts);
       for (const txn of result.transactions) {
-        covered.add(txn.accountId);
         const list = txnsByAccount.get(txn.accountId) ?? [];
         list.push(txn);
         txnsByAccount.set(txn.accountId, list);
@@ -106,47 +107,35 @@ export async function runSync(cfg: SyncConfig, deps: SyncDeps): Promise<0 | 1> {
     }
   }
 
-  const mappedPlaidIds = new Set(cfg.accountMap.map((m) => m.plaidAccountId));
-  for (const id of covered) {
-    if (!mappedPlaidIds.has(id)) log.info(`Skipping unmapped Plaid account ${id}`);
+  // An entry whose Plaid account wasn't fetched is only skipped (never planned against an empty
+  // txn list) when a bank failed this run, so its uncleared rows can't be deleted as cancelled holds.
+  const resolution = resolveAccounts(cfg.accounts, plaidAccounts, await gateway.getAccounts(), {
+    file: cfg.accountsFile,
+    incomplete,
+  });
+  for (const message of resolution.errors) {
+    log.error(message);
+    failed = true;
+  }
+  for (const message of resolution.skipped) log.debug(message);
+
+  const mappedPlaidIds = new Set(resolution.resolved.map((r) => r.plaidAccountId));
+  const logged = new Set<string>();
+  for (const account of plaidAccounts) {
+    if (mappedPlaidIds.has(account.accountId) || logged.has(account.accountId)) continue;
+    logged.add(account.accountId);
+    log.info(`Skipping unmapped Plaid account ${describePlaidAccount(account)}`);
   }
 
-  const actualAccounts = new Map((await gateway.getAccounts()).map((a) => [a.id, a]));
-
-  for (const mapping of cfg.accountMap) {
-    const account = actualAccounts.get(mapping.actualAccountId);
-    if (!account) {
-      log.error(
-        `ACCOUNT_MAP references Actual account ${mapping.actualAccountId} which does not exist in the budget`,
-      );
-      failed = true;
-      continue;
-    }
-    if (!covered.has(mapping.plaidAccountId)) {
-      if (incomplete) {
-        log.debug(`Skipping ${account.name}: its bank was not fetched this run`);
-      } else {
-        log.error(
-          `ACCOUNT_MAP references Plaid account ${mapping.plaidAccountId} not found on any access token`,
-        );
-        failed = true;
-      }
-      continue;
-    }
-
-    // planAccount does no account filtering itself, so only this mapping's Plaid txns and
-    // only this mapping's Actual rows (loaded with the extended lookback window) are passed in.
+  for (const { plaidAccountId, actualAccount: account } of resolution.resolved) {
+    // planAccount does no account filtering itself, so only this entry's Plaid txns and
+    // only this entry's Actual rows (loaded with the extended lookback window) are passed in.
     // A gateway failure anywhere in this block (read, plan, or write) must not abort later
-    // mappings, so it is caught and turned into a failed-account log line instead of a thrown
+    // entries, so it is caught and turned into a failed-account log line instead of a thrown
     // error escaping runSync.
     try {
       const rows = await gateway.getTransactions(account.id, window.lookbackStart, window.end);
-      const plan = planAccount(
-        account.id,
-        txnsByAccount.get(mapping.plaidAccountId) ?? [],
-        rows,
-        window,
-      );
+      const plan = planAccount(account.id, txnsByAccount.get(plaidAccountId) ?? [], rows, window);
       for (const notice of plan.notices) {
         log.warn(
           `${account.name}: skipped ${notice.actualId} (${notice.reason}): ${notice.detail}`,

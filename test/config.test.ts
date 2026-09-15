@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { ConfigError, loadAccountsConfig, loadLinkConfig, loadSyncConfig } from '../src/config.js';
+import {
+  ConfigError,
+  loadAccountsConfig,
+  loadLinkConfig,
+  loadSyncConfig,
+  parseAccountsFile,
+} from '../src/config.js';
 
 const PLAID_ENV_VARS = {
   PLAID_CLIENT_ID: 'client-123',
@@ -17,8 +23,32 @@ const SYNC_ENV = {
   ...PLAID_ENV_VARS,
   ...ACTUAL_ENV_VARS,
   PLAID_ACCESS_TOKENS: 'access-sandbox-aaaa',
-  ACCOUNT_MAP: 'plaidA:actualA',
 };
+
+const ACCOUNTS_YAML = `accounts:
+  - plaid: "1234"
+    actual: Chase Checking
+  - plaid: { id: BxBXxLj1m4HMXBm9WZZmCWVbPjX16EHwv99vp }
+    actual: Joint Visa
+`;
+
+function enoent(path: string): Error {
+  return Object.assign(new Error(`ENOENT: no such file or directory, open '${path}'`), {
+    code: 'ENOENT',
+  });
+}
+
+/** Reads fake files; the default accounts.yaml is always valid. */
+function reader(files: Record<string, string> = {}): (path: string) => string {
+  const all: Record<string, string> = { 'accounts.yaml': ACCOUNTS_YAML, ...files };
+  return (path) => {
+    const text = all[path];
+    if (text === undefined) throw enoent(path);
+    return text;
+  };
+}
+
+const loadSync = (env: NodeJS.ProcessEnv) => loadSyncConfig(env, reader());
 
 function problemsOf(fn: () => unknown): string[] {
   try {
@@ -47,16 +77,20 @@ describe('ConfigError', () => {
 
 describe('loadSyncConfig', () => {
   it('parses a complete environment', () => {
-    const cfg = loadSyncConfig({
-      ...SYNC_ENV,
-      PLAID_ENV: 'production',
-      PLAID_ACCESS_TOKENS: 'access-production-aaaa,access-production-bbbb',
-      ACCOUNT_MAP: 'plaidA:actualA,plaidB:actualB',
-      ACTUAL_ENCRYPTION_PASSWORD: 'e2e-pw',
-      SYNC_DAYS: '14',
-      DRY_RUN: 'true',
-      LOG_LEVEL: 'debug',
-    });
+    const readFile = reader({ '/config/accounts.yaml': ACCOUNTS_YAML });
+    const cfg = loadSyncConfig(
+      {
+        ...SYNC_ENV,
+        PLAID_ENV: 'production',
+        PLAID_ACCESS_TOKENS: 'access-production-aaaa,access-production-bbbb',
+        ACCOUNTS_FILE: '/config/accounts.yaml',
+        ACTUAL_ENCRYPTION_PASSWORD: 'e2e-pw',
+        SYNC_DAYS: '14',
+        DRY_RUN: 'true',
+        LOG_LEVEL: 'debug',
+      },
+      readFile,
+    );
 
     expect(cfg).toEqual({
       plaid: { clientId: 'client-123', secret: 'secret-456', env: 'production' },
@@ -67,9 +101,10 @@ describe('loadSyncConfig', () => {
         encryptionPassword: 'e2e-pw',
       },
       accessTokens: ['access-production-aaaa', 'access-production-bbbb'],
-      accountMap: [
-        { plaidAccountId: 'plaidA', actualAccountId: 'actualA' },
-        { plaidAccountId: 'plaidB', actualAccountId: 'actualB' },
+      accountsFile: '/config/accounts.yaml',
+      accounts: [
+        { plaid: { mask: '1234' }, actual: 'Chase Checking' },
+        { plaid: { id: 'BxBXxLj1m4HMXBm9WZZmCWVbPjX16EHwv99vp' }, actual: 'Joint Visa' },
       ],
       syncDays: 14,
       dryRun: true,
@@ -78,8 +113,9 @@ describe('loadSyncConfig', () => {
   });
 
   it('applies defaults for optional variables', () => {
-    const cfg = loadSyncConfig(SYNC_ENV);
+    const cfg = loadSync(SYNC_ENV);
 
+    expect(cfg.accountsFile).toBe('accounts.yaml');
     expect(cfg.syncDays).toBe(30);
     expect(cfg.dryRun).toBe(false);
     expect(cfg.logLevel).toBe('info');
@@ -87,7 +123,7 @@ describe('loadSyncConfig', () => {
   });
 
   it('treats empty and whitespace-only values as unset', () => {
-    const cfg = loadSyncConfig({
+    const cfg = loadSync({
       ...SYNC_ENV,
       ACTUAL_ENCRYPTION_PASSWORD: '',
       SYNC_DAYS: '  ',
@@ -100,26 +136,17 @@ describe('loadSyncConfig', () => {
   });
 
   it('trims comma lists and drops empty entries', () => {
-    const cfg = loadSyncConfig({
-      ...SYNC_ENV,
-      PLAID_ACCESS_TOKENS: ' tok-1 , ,tok-2,',
-      ACCOUNT_MAP: ' plaidA : actualA ,, plaidB:actualB , ',
-    });
+    const cfg = loadSync({ ...SYNC_ENV, PLAID_ACCESS_TOKENS: ' tok-1 , ,tok-2,' });
 
     expect(cfg.accessTokens).toEqual(['tok-1', 'tok-2']);
-    expect(cfg.accountMap).toEqual([
-      { plaidAccountId: 'plaidA', actualAccountId: 'actualA' },
-      { plaidAccountId: 'plaidB', actualAccountId: 'actualB' },
-    ]);
   });
 
   it('reports every missing required variable at once', () => {
-    expect(problemsOf(() => loadSyncConfig({}))).toEqual([
+    expect(problemsOf(() => loadSync({}))).toEqual([
       'PLAID_CLIENT_ID: is required',
       'PLAID_SECRET: is required',
       'PLAID_ENV: is required',
       'PLAID_ACCESS_TOKENS: is required',
-      'ACCOUNT_MAP: is required',
       'ACTUAL_SERVER_URL: is required',
       'ACTUAL_PASSWORD: is required',
       'ACTUAL_SYNC_ID: is required',
@@ -127,56 +154,20 @@ describe('loadSyncConfig', () => {
   });
 
   it('includes every problem in the error message', () => {
-    expect(() => loadSyncConfig({ ...SYNC_ENV, PLAID_SECRET: undefined, SYNC_DAYS: 'x' })).toThrow(
+    expect(() => loadSync({ ...SYNC_ENV, PLAID_SECRET: undefined, SYNC_DAYS: 'x' })).toThrow(
       'Invalid configuration:\n  - PLAID_SECRET: is required\n  - SYNC_DAYS: must be an integer between 1 and 730 (got "x")',
     );
   });
 
-  it('reports each malformed ACCOUNT_MAP entry', () => {
-    expect(
-      problemsOf(() =>
-        loadSyncConfig({ ...SYNC_ENV, ACCOUNT_MAP: 'plaidA:actualA,oops,:actualC,plaidD:,a:b:c' }),
-      ),
-    ).toEqual([
-      'ACCOUNT_MAP: entry 2 "oops" must be plaidAccountId:actualAccountId',
-      'ACCOUNT_MAP: entry 3 ":actualC" must be plaidAccountId:actualAccountId',
-      'ACCOUNT_MAP: entry 4 "plaidD:" must be plaidAccountId:actualAccountId',
-      'ACCOUNT_MAP: entry 5 "a:b:c" must be plaidAccountId:actualAccountId',
-    ]);
-  });
-
-  it('rejects a Plaid account mapped twice', () => {
-    expect(
-      problemsOf(() =>
-        loadSyncConfig({ ...SYNC_ENV, ACCOUNT_MAP: 'plaidA:actualA,plaidA:actualB' }),
-      ),
-    ).toEqual(['ACCOUNT_MAP: plaid account "plaidA" is mapped more than once']);
-  });
-
-  it('rejects an Actual account mapped twice', () => {
-    expect(
-      problemsOf(() =>
-        loadSyncConfig({ ...SYNC_ENV, ACCOUNT_MAP: 'plaidA:actualA,plaidB:actualA' }),
-      ),
-    ).toEqual(['ACCOUNT_MAP: Actual account "actualA" is mapped more than once']);
-  });
-
   it('rejects lists that contain only separators', () => {
-    expect(
-      problemsOf(() =>
-        loadSyncConfig({ ...SYNC_ENV, PLAID_ACCESS_TOKENS: ',', ACCOUNT_MAP: ' , ' }),
-      ),
-    ).toEqual([
+    expect(problemsOf(() => loadSync({ ...SYNC_ENV, PLAID_ACCESS_TOKENS: ',' }))).toEqual([
       'PLAID_ACCESS_TOKENS: must contain at least one entry',
-      'ACCOUNT_MAP: must contain at least one entry',
     ]);
   });
 
   it('rejects unknown enum values', () => {
     expect(
-      problemsOf(() =>
-        loadSyncConfig({ ...SYNC_ENV, PLAID_ENV: 'development', LOG_LEVEL: 'verbose' }),
-      ),
+      problemsOf(() => loadSync({ ...SYNC_ENV, PLAID_ENV: 'development', LOG_LEVEL: 'verbose' })),
     ).toEqual([
       'PLAID_ENV: must be one of: sandbox, production (got "development")',
       'LOG_LEVEL: must be one of: debug, info, warn, error (got "verbose")',
@@ -184,9 +175,9 @@ describe('loadSyncConfig', () => {
   });
 
   it('rejects a server URL that is not http(s)', () => {
-    expect(
-      problemsOf(() => loadSyncConfig({ ...SYNC_ENV, ACTUAL_SERVER_URL: 'actual.local' })),
-    ).toEqual(['ACTUAL_SERVER_URL: must be an http(s) URL']);
+    expect(problemsOf(() => loadSync({ ...SYNC_ENV, ACTUAL_SERVER_URL: 'actual.local' }))).toEqual([
+      'ACTUAL_SERVER_URL: must be an http(s) URL',
+    ]);
   });
 
   it.each([
@@ -197,28 +188,224 @@ describe('loadSyncConfig', () => {
     ['False', false],
     ['0', false],
   ])('parses DRY_RUN=%j as %s', (value, expected) => {
-    expect(loadSyncConfig({ ...SYNC_ENV, DRY_RUN: value }).dryRun).toBe(expected);
+    expect(loadSync({ ...SYNC_ENV, DRY_RUN: value }).dryRun).toBe(expected);
   });
 
   it('rejects an invalid DRY_RUN', () => {
-    expect(problemsOf(() => loadSyncConfig({ ...SYNC_ENV, DRY_RUN: 'yes' }))).toEqual([
+    expect(problemsOf(() => loadSync({ ...SYNC_ENV, DRY_RUN: 'yes' }))).toEqual([
       'DRY_RUN: must be one of: true, false, 1, 0 (got "yes")',
     ]);
   });
 
   it.each(['0', '-5', '1.5', 'abc', '731'])('rejects SYNC_DAYS=%j', (value) => {
-    expect(problemsOf(() => loadSyncConfig({ ...SYNC_ENV, SYNC_DAYS: value }))).toEqual([
+    expect(problemsOf(() => loadSync({ ...SYNC_ENV, SYNC_DAYS: value }))).toEqual([
       `SYNC_DAYS: must be an integer between 1 and 730 (got "${value}")`,
     ]);
   });
 
   it('never echoes secret values in problems', () => {
     const problems = problemsOf(() =>
-      loadSyncConfig({ ...SYNC_ENV, PLAID_ENV: 'bogus', ACCOUNT_MAP: 'bad' }),
+      loadSyncConfig(
+        { ...SYNC_ENV, PLAID_ENV: 'bogus' },
+        reader({ 'accounts.yaml': 'accounts:\n  - plaid: 1234\n' }),
+      ),
     );
 
     expect(problems.join('\n')).not.toContain('secret-456');
     expect(problems.join('\n')).not.toContain('actual-pw');
+  });
+});
+
+describe('loadSyncConfig accounts file', () => {
+  it('reads ACCOUNTS_FILE instead of the default path', () => {
+    const cfg = loadSyncConfig(
+      { ...SYNC_ENV, ACCOUNTS_FILE: 'other.yaml' },
+      reader({
+        'accounts.yaml': 'not: used',
+        'other.yaml': 'accounts:\n  - plaid: "9"\n    actual: X\n',
+      }),
+    );
+    expect(cfg.accountsFile).toBe('other.yaml');
+    expect(cfg.accounts).toEqual([{ plaid: { mask: '9' }, actual: 'X' }]);
+  });
+
+  it('reports a missing file as one problem without a stack', () => {
+    expect(
+      problemsOf(() => loadSyncConfig({ ...SYNC_ENV, ACCOUNTS_FILE: 'missing.yaml' }, reader())),
+    ).toEqual(['missing.yaml: cannot read file (ENOENT)']);
+  });
+
+  it('falls back to the error message when a read error has no code', () => {
+    const readFile = () => {
+      throw new Error('boom\nstack-ish detail');
+    };
+    expect(problemsOf(() => loadSyncConfig(SYNC_ENV, readFile))).toEqual([
+      'accounts.yaml: cannot read file (boom)',
+    ]);
+  });
+
+  it('reports env problems and file problems together', () => {
+    expect(
+      problemsOf(() =>
+        loadSyncConfig(
+          { ...SYNC_ENV, PLAID_SECRET: undefined },
+          reader({ 'accounts.yaml': 'accounts:\n  - plaid: "1"\n' }),
+        ),
+      ),
+    ).toEqual(['PLAID_SECRET: is required', 'accounts.yaml: entry 1: actual is required']);
+  });
+
+  it('uses the real filesystem by default', () => {
+    expect(
+      problemsOf(() =>
+        loadSyncConfig({ ...SYNC_ENV, ACCOUNTS_FILE: '/nonexistent/actual-plaid-sync.yaml' }),
+      ),
+    ).toEqual(['/nonexistent/actual-plaid-sync.yaml: cannot read file (ENOENT)']);
+  });
+});
+
+describe('parseAccountsFile', () => {
+  const parse = (text: string) => parseAccountsFile(text, 'accounts.yaml');
+
+  it('parses masks and pinned ids, trimming values', () => {
+    expect(
+      parse(
+        'accounts:\n  - plaid: " 1234 "\n    actual: "  Chase Checking "\n  - plaid: { id: abc }\n    actual: Visa\n',
+      ),
+    ).toEqual({
+      accounts: [
+        { plaid: { mask: '1234' }, actual: 'Chase Checking' },
+        { plaid: { id: 'abc' }, actual: 'Visa' },
+      ],
+      problems: [],
+    });
+  });
+
+  it.each([
+    ['an empty file', ''],
+    ['a comment-only file', '# nothing yet\n'],
+    ['an empty accounts key', 'accounts:\n'],
+    ['an empty list', 'accounts: []\n'],
+  ])('rejects %s', (_label, text) => {
+    expect(parse(text).problems).toEqual([
+      'accounts.yaml: accounts must contain at least one entry',
+    ]);
+  });
+
+  it('reports invalid YAML as one line with its position', () => {
+    const { problems } = parse('accounts: [\n');
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatch(/^accounts\.yaml: invalid YAML: .* at line 2, column 1$/);
+  });
+
+  it('reports duplicate YAML keys', () => {
+    const { problems } = parse('accounts:\n  - plaid: "1"\n    plaid: "2"\n    actual: X\n');
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatch(/^accounts\.yaml: invalid YAML: Map keys must be unique/);
+  });
+
+  it('rejects a non-mapping root, a non-list accounts, and unknown top-level keys', () => {
+    expect(parse('- plaid: "1"\n').problems).toEqual([
+      'accounts.yaml: must be a mapping with an "accounts" list',
+    ]);
+    expect(parse('accounts: nope\nextra: 1\n').problems).toEqual([
+      'accounts.yaml: unknown key "extra"',
+      'accounts.yaml: accounts must be a list',
+    ]);
+  });
+
+  it('asks for quotes around an unquoted numeric mask, keeping leading zeros', () => {
+    expect(
+      parse('accounts:\n  - plaid: 1234\n    actual: A\n  - plaid: 0123\n    actual: B\n').problems,
+    ).toEqual([
+      'accounts.yaml: entry 1: plaid mask 1234 must be quoted ("1234")',
+      'accounts.yaml: entry 2: plaid mask 0123 must be quoted ("0123")',
+    ]);
+  });
+
+  it('accepts plain account IDs alongside quoted masks and legacy ID objects', () => {
+    expect(
+      parseAccountsFile(
+        [
+          'accounts:',
+          '  - plaid: " p-checking "',
+          '    actual: Checking',
+          '  - plaid: "0123"',
+          '    actual: Savings',
+          '  - plaid: { id: p-card }',
+          '    actual: Card',
+        ].join('\n'),
+        'accounts.yaml',
+      ),
+    ).toEqual({
+      accounts: [
+        { plaid: { id: 'p-checking' }, actual: 'Checking' },
+        { plaid: { mask: '0123' }, actual: 'Savings' },
+        { plaid: { id: 'p-card' }, actual: 'Card' },
+      ],
+      problems: [],
+    });
+  });
+
+  it('reports every bad entry shape with its 1-based number', () => {
+    const text = [
+      'accounts:',
+      '  - plaid: "1"',
+      '    actual: One',
+      '  - just a string',
+      '  - actual: Three',
+      '  - plaid: "4"',
+      '  - plaid: ""',
+      '    actual: "  "',
+      '  - plaid: { id: "" }',
+      '    actual: 7',
+      '  - plaid: { account: x }',
+      '    actual: [a]',
+      '  - plaid: true',
+      '    actual: Nine',
+      '    actaul: typo',
+      '  - plaid: { id: 5 }',
+      '    actual: Ten',
+    ].join('\n');
+    expect(parse(text).problems).toEqual([
+      'accounts.yaml: entry 2: must be a mapping with plaid and actual',
+      'accounts.yaml: entry 3: plaid is required',
+      'accounts.yaml: entry 4: actual is required',
+      'accounts.yaml: entry 5: plaid must not be empty',
+      'accounts.yaml: entry 5: actual must not be empty',
+      'accounts.yaml: entry 6: plaid.id must not be empty',
+      'accounts.yaml: entry 6: actual 7 must be quoted ("7")',
+      'accounts.yaml: entry 7: plaid: unknown key "account"',
+      'accounts.yaml: entry 7: plaid.id is required',
+      'accounts.yaml: entry 7: actual must be an Actual account name',
+      'accounts.yaml: entry 8: unknown key "actaul"',
+      'accounts.yaml: entry 8: plaid must be an account ID string or a quoted mask like "1234"',
+      'accounts.yaml: entry 9: plaid.id must be a string',
+    ]);
+  });
+
+  it('rejects static duplicates of a mask, an id, or an Actual name (case-insensitive)', () => {
+    const text = [
+      'accounts:',
+      '  - plaid: "1234"',
+      '    actual: Chase Checking',
+      '  - plaid: "1234"',
+      '    actual: Other',
+      '  - plaid: { id: abc }',
+      '    actual: Visa',
+      '  - plaid: { id: abc }',
+      '    actual: Amex',
+      '  - plaid: "9999"',
+      '    actual: " chase CHECKING"',
+    ].join('\n');
+    expect(parse(text)).toEqual({
+      accounts: [],
+      problems: [
+        'accounts.yaml: entry 2: plaid mask 1234 is already used by entry 1',
+        'accounts.yaml: entry 4: plaid id abc is already used by entry 3',
+        'accounts.yaml: entry 5: actual "chase CHECKING" is already used by entry 1',
+      ],
+    });
   });
 });
 
@@ -228,7 +415,7 @@ describe('loadAccountsConfig', () => {
       ...PLAID_ENV_VARS,
       ...ACTUAL_ENV_VARS,
       PLAID_ACCESS_TOKENS: 'tok-1,tok-2',
-      ACCOUNT_MAP: 'not valid but unused',
+      ACCOUNTS_FILE: '/does/not/exist.yaml',
       SYNC_DAYS: 'not used either',
     });
 

@@ -2,14 +2,14 @@
 
 Sync bank transactions from [Plaid](https://plaid.com) into a self-hosted [Actual Budget](https://actualbudget.org) server, including pending transactions.
 
-- **Stateless.** Runs as a Kubernetes CronJob, configured only through env vars. Actual is the only state.
+- **Stateless.** Runs as a Kubernetes CronJob, configured through env vars and accounts.yaml. Actual is the only state.
 - **Pending-aware.** Pending transactions are imported right away, then updated in place when they post. Cancelled holds are removed.
 - **OAuth banks work** (Chase etc.) through a one-time local `link` command. No HTTPS or redirect URI setup.
 - Ships as a multi-arch (`linux/amd64`, `linux/arm64`) image: `ghcr.io/msheiny/actual-plaid-sync`.
 
 ```mermaid
 flowchart LR
-  laptop["link / accounts (laptop, once)"] -->|access tokens, ACCOUNT_MAP| secret[(K8s Secret)]
+  laptop["link / accounts (laptop, once)"] -->|access tokens, accounts.yaml| secret[(K8s Secret)]
   secret --> cron["CronJob: sync every 6h"]
   plaid[Plaid /transactions/get] --> cron
   cron -->|import / update / delete| actual[Actual server]
@@ -55,7 +55,7 @@ Or from a checkout: `mise install && pnpm install && mise run build && mise run 
 
 Open <http://localhost:8484>, then connect the bank in Plaid Link. The command prints the access token and the Item's accounts, then exits. Repeat for each bank login, collecting the tokens into a comma-separated `PLAID_ACCESS_TOKENS`. Link requests 730 days of history; that can only be set at link time.
 
-### 3. Build `ACCOUNT_MAP` (`accounts`)
+### 3. Build `accounts.yaml` (`accounts`)
 
 ```bash
 export PLAID_ACCESS_TOKENS=access-production-aaa,access-production-bbb
@@ -65,9 +65,9 @@ docker run --rm -e PLAID_CLIENT_ID -e PLAID_SECRET -e PLAID_ENV -e PLAID_ACCESS_
   ghcr.io/msheiny/actual-plaid-sync:0.1.0 accounts
 ```
 
-(or `mise run accounts`). It lists the Plaid and Actual accounts side by side and prints a suggested `ACCOUNT_MAP=plaidId:actualId,...` line. Check it and edit it as needed. Plaid accounts left out of the map are skipped.
+(or `mise run accounts`). It lists the Plaid and Actual accounts side by side and prints a suggested `accounts.yaml`. Copy the YAML into that file and review it. When nothing matches, it prints full Plaid IDs with placeholder Actual names; replace those names or remove unwanted entries. Accounts left out of the file are skipped.
 
-### 4. Create the Secret
+### 4. Create the Secret and accounts ConfigMap
 
 Edit `deploy/cronjob.yaml` and replace every `change-me` value, or create the Secret yourself:
 
@@ -75,11 +75,17 @@ Edit `deploy/cronjob.yaml` and replace every `change-me` value, or create the Se
 kubectl create secret generic actual-plaid-sync \
   --from-literal=PLAID_CLIENT_ID="$PLAID_CLIENT_ID" --from-literal=PLAID_SECRET="$PLAID_SECRET" \
   --from-literal=PLAID_ENV=production --from-literal=PLAID_ACCESS_TOKENS="$PLAID_ACCESS_TOKENS" \
-  --from-literal=ACCOUNT_MAP="..." --from-literal=ACTUAL_SERVER_URL="$ACTUAL_SERVER_URL" \
+  --from-literal=ACTUAL_SERVER_URL="$ACTUAL_SERVER_URL" \
   --from-literal=ACTUAL_PASSWORD="$ACTUAL_PASSWORD" --from-literal=ACTUAL_SYNC_ID="$ACTUAL_SYNC_ID"
 ```
 
-If you create it this way, delete the `Secret` document from `deploy/cronjob.yaml` before applying.
+Create the accounts ConfigMap from your reviewed file:
+
+```bash
+kubectl create configmap actual-plaid-sync-accounts --from-file=accounts.yaml
+```
+
+If you create these yourself, delete the `Secret` and `ConfigMap` documents from `deploy/cronjob.yaml` before applying.
 
 ### 5. Apply the CronJob
 
@@ -107,7 +113,7 @@ Each mapped account logs one summary line, for example `Chase Checking: 5 added,
 | `PLAID_ENV` | all | — | `sandbox` \| `production` |
 | `PLAID_COUNTRY_CODES` | link | `US` | comma list |
 | `PLAID_ACCESS_TOKENS` | sync, accounts | — | comma list, one per bank login (Item) |
-| `ACCOUNT_MAP` | sync | — | comma list of `plaidAccountId:actualAccountId`; each Plaid account and each Actual account may appear at most once |
+| `ACCOUNTS_FILE` | sync | `accounts.yaml` | path to the accounts file, relative to the working directory |
 | `ACTUAL_SERVER_URL` | sync, accounts | — | |
 | `ACTUAL_PASSWORD` | sync, accounts | — | |
 | `ACTUAL_SYNC_ID` | sync, accounts | — | Settings → Advanced → Sync ID |
@@ -120,6 +126,24 @@ Each mapped account logs one summary line, for example `Chase Checking: 5 added,
 | `LOG_LEVEL` | all | `info` | `debug` \| `info` \| `warn` \| `error` |
 
 All config problems are reported together and the command exits with code `2`. Exit codes: `0` success, `1` any Plaid/Actual failure (healthy accounts are still synced), `2` config error.
+
+## Accounts file
+
+`sync` only touches the accounts listed in `accounts.yaml`:
+
+```yaml
+accounts:
+  - plaid: "1234"            # Plaid mask (last 4 digits); keep the quotes
+    actual: Chase Checking   # Actual account name
+  - plaid: BxBXxLj1m4HMXBm9WZZmCWVbPjX16EHwv99vp
+    actual: Joint Visa
+```
+
+- `plaid` is the Plaid account ID from `accounts`, or a quoted digits-only mask (last digits). Existing `{ id: ... }` entries are also accepted. Use the ID when two accounts share a mask or an account has no mask. An unquoted mask is rejected, since YAML reads `0123` as the number 123.
+- `actual` is the name of an open Actual account, ignoring case. If you rename the account in Actual, update the file.
+- Each Plaid account and each Actual account can be listed once.
+- Masks survive linking a bank again. Plaid account IDs stay the same when you repair a login with `link --update`, but change if you remove the bank and link it from scratch.
+
 
 ## Relinking a bank (`link --update`)
 

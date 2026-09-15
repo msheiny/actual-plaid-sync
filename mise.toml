@@ -49,7 +49,7 @@ depends = ["build"]
 run = "node dist/cli.js link"
 
 [tasks.accounts]
-description = "List Plaid and Actual accounts and suggest ACCOUNT_MAP"
+description = "List Plaid and Actual accounts and suggest accounts.yaml"
 depends = ["build"]
 run = "node dist/cli.js accounts"
 

@@ -266,7 +266,7 @@ describe('formatLinkResult', () => {
     expect(lines).toContain('  acc-checking-1  Plaid Checking     0000  depository/checking');
     expect(lines).toContain('  acc-cc          Plaid Credit Card  -     credit');
     expect(out).toContain('run `actual-plaid-sync accounts`');
-    expect(out).toContain('ACCOUNT_MAP');
+    expect(out).toContain('accounts.yaml');
   });
 
   it('says the existing token stays valid in update mode and does not print it', () => {

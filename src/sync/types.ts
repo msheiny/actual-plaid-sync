@@ -1,3 +1,5 @@
+import type { PlaidAccountInfo } from '../plaid/accounts.js';
+
 export interface PlaidTxn {
   transactionId: string;
   accountId: string;
@@ -22,7 +24,7 @@ export interface ActualTxn {
 }
 
 export interface PlaidFetchResult {
-  accountIds: string[]; // every account on the Item (from the /transactions/get `accounts` field), even with zero txns
+  accounts: PlaidAccountInfo[]; // every account on the Item (from the /transactions/get `accounts` field), even with zero txns
   transactions: PlaidTxn[];
 }
 

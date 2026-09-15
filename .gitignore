@@ -3,5 +3,7 @@ dist/
 coverage/
 *.log
 .env
+accounts.yaml
 .env.*
+!.env.example
 mise.local.toml

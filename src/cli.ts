@@ -126,7 +126,7 @@ function buildProgram(env: NodeJS.ProcessEnv, setExitCode: (code: number) => voi
 
   program
     .command('accounts')
-    .description('List Plaid and Actual accounts and suggest an ACCOUNT_MAP')
+    .description('List Plaid and Actual accounts and suggest an accounts.yaml')
     .action(async () => {
       const cfg = loadAccountsConfig(env);
       const log = createLogger(cfg.logLevel);

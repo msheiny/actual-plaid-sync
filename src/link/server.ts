@@ -77,7 +77,7 @@ export function formatLinkResult(result: LinkResult): string {
     'Accounts:',
     ...formatAccountTable(result.accounts),
     '',
-    'Next: run `actual-plaid-sync accounts` to match these accounts to Actual and build ACCOUNT_MAP.',
+    'Next: run `actual-plaid-sync accounts` to match these accounts to Actual and build accounts.yaml.',
   );
   return lines.join('\n');
 }
