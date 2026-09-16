@@ -296,7 +296,7 @@ describe('runAccounts', () => {
     });
 
     expect(code).toBe(0);
-    expect(out).toContain('Plaid accounts for access token …1111:');
+    expect(out).toContain('Plaid accounts for bank 1 (…1111):');
     expect(
       out.some(
         (l) =>
@@ -346,12 +346,10 @@ describe('runAccounts', () => {
 
     expect(code).toBe(1);
     expect(
-      logLines.some(
-        (l) => l.includes('ERROR') && l.includes('…2222') && l.includes('link --update'),
-      ),
+      logLines.some((l) => l.includes('ERROR') && l.includes('…2222') && l.includes('link:update')),
     ).toBe(true);
-    expect(out).toContain('Plaid accounts for access token …3333:');
-    expect(out).not.toContain('Plaid accounts for access token …2222:');
+    expect(out).toContain('Plaid accounts for bank 2 (…3333):');
+    expect(out).not.toContain('Plaid accounts for bank 1 (…2222):');
     expect(out).toContain('  - plaid: plaid-9');
     expect(out).toContain('    actual: REPLACE_WITH_ACTUAL_ACCOUNT_NAME_1 # Plaid: Savings');
     expect(out.some((l) => l.startsWith('No confident matches found'))).toBe(true);

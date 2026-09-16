@@ -7,6 +7,7 @@ Connect each bank through a local browser page, choose which accounts to sync, t
 | Command | What it does |
 |---|---|
 | `mise run link` | Opens a local bank-connection flow and prints an access token to save in `.env`. Run once per bank login. |
+| `mise run link:update` | Lets you choose a configured bank token, then opens Plaid's repair flow. |
 | `mise run accounts` | Lists Plaid and Actual accounts and writes suggested mappings to `accounts.yaml` for you to edit. |
 | `mise run sync` | Imports, updates, and removes transactions in the mapped Actual accounts. Set `DRY_RUN=true` to preview those changes. |
 
@@ -205,17 +206,17 @@ Change `-e DRY_RUN=true` to `-e DRY_RUN=false` to apply changes. The accounts fi
 
 ## Repair a bank connection
 
-If a run reports `ITEM_LOGIN_REQUIRED`, `PENDING_EXPIRATION`, or `PENDING_DISCONNECT`, repair the existing login. Logs identify its token by its last characters, such as `…a1b2`.
+If a run reports `ITEM_LOGIN_REQUIRED`, `PENDING_EXPIRATION`, or `PENDING_DISCONNECT`, repair the existing login. Logs identify its position in `PLAID_ACCESS_TOKENS` and its last characters, such as `Bank 2 (…a1b2)`.
 
-Set `LINK_ACCESS_TOKEN` in `.env` to the full token for that login, then run:
+Run the dedicated update task:
 
 ```bash
-mise run link -- --update
+mise run link:update
 ```
 
-Open the printed URL and complete the bank's prompts. Update mode keeps the existing access token, so you do not need to replace it in `.env` or the deployment Secret. Prefer repairing a connection over creating a new Item.
+Choose the numbered bank identified by the failing sync log, then open the printed URL and complete the bank's prompts. The picker reads `PLAID_ACCESS_TOKENS` from `.env` and displays each token's position and last four characters. If only one token is configured, it is selected automatically. Update mode keeps the existing access token, so you do not need to replace it in `.env` or the deployment Secret. Prefer repairing a connection over creating a new Item.
 
-You can also pass `--access-token <token>` after `--update`; it overrides `LINK_ACCESS_TOKEN`.
+For scripts or other non-interactive use, run `mise run link:update -- --access-token <token>`. An explicit `--access-token` still overrides `LINK_ACCESS_TOKEN` and the picker.
 
 ## Configuration reference
 
@@ -227,20 +228,35 @@ Mise reads `.env`; direct CLI use reads the process environment, and the Docker 
 | `PLAID_SECRET` | all | required | Secret for the selected Plaid environment |
 | `PLAID_ENV` | all | required | `sandbox` or `production` |
 | `PLAID_COUNTRY_CODES` | link | `US` | Comma-separated country codes |
-| `PLAID_ACCESS_TOKENS` | accounts, sync | required | Comma-separated tokens, one per bank login |
+| `PLAID_ACCESS_TOKENS` | accounts, sync, link:update | required for accounts and sync | Comma-separated tokens, one per bank login; update mode presents them in its picker |
 | `ACTUAL_SERVER_URL` | accounts, sync | required | Actual server URL |
 | `ACTUAL_PASSWORD` | accounts, sync | required | Actual server login password |
 | `ACTUAL_SYNC_ID` | accounts, sync | required | Budget's Sync ID from Settings → Show advanced settings → IDs |
 | `ACTUAL_ENCRYPTION_PASSWORD` | accounts, sync | unset | Password for an end-to-end encrypted budget |
 | `ACCOUNTS_FILE` | accounts, sync | `accounts.yaml` | Output file for `accounts`; input file for `sync`. Relative paths start at the working directory. |
 | `SYNC_DAYS` | sync | `30` | Days of history to fetch, from `1` to `730` |
-| `DRY_RUN` | sync | `false` | `true`: preview transaction changes. `false`: apply them. |
+| `DRY_RUN` | sync | `false` | `true`: preview transaction changes and skip refresh. `false`: apply them. |
+| `PLAID_REFRESH_TRANSACTIONS` | sync | `false` | Refresh each bank before fetching transactions; skipped during dry runs. Accepts `true`, `false`, `1`, or `0`. |
 | `LINK_PORT` | link | `8484` | Port for the local Link page |
 | `LINK_HOST` | link | `127.0.0.1` | Address the Link server listens on |
-| `LINK_ACCESS_TOKEN` | link --update | required for update | Existing token to repair |
+| `LINK_ACCESS_TOKEN` | link:update / link --update | unset | Existing token to repair; bypasses the `PLAID_ACCESS_TOKENS` picker |
 | `LOG_LEVEL` | all | `info` | `debug`, `info`, `warn`, or `error` |
 
 Exit codes: `0` success, `1` runtime failure, `2` invalid configuration or command usage. During sync, a failed bank or mapping does not stop healthy accounts from syncing; the command still exits with `1`.
+
+### Optional transaction refresh
+
+To request fresh bank data before importing, set `PLAID_REFRESH_TRANSACTIONS=true` in `.env` or pass it for one run:
+
+```bash
+PLAID_REFRESH_TRANSACTIONS=true DRY_RUN=false mise run sync
+```
+
+Sync checks `/item/get` for the Transactions product, then waits for `/transactions/refresh` to finish before fetching that token's transactions. Refresh runs once per configured token, before pagination, subject to the existing retry policy (up to four attempts for transient failures). An Item without Transactions initialized skips refresh with a `TRANSACTIONS_NOT_INITIALIZED` warning and proceeds with the normal transaction fetch. `DRY_RUN=true` skips both the product check and refresh and previews cached data.
+
+If the product check or refresh fails, sync logs a warning and fetches transactions normally for the same bank using Plaid's cached data. A refresh failure alone does not fail the run; normal fetch and import error handling still applies. Logs use the existing masked bank identifiers and safe Plaid errors.
+
+[Plaid refresh](https://plaid.com/docs/api/products/transactions/#transactionsrefresh) adds a round trip per bank before its transactions are fetched, so a refreshed run takes longer than a normal one. Allow for that, and for retries, in network and scheduler timeouts; the example CronJob has a 900-second deadline. This client does not set an HTTP timeout.
 
 ### Accounts file
 

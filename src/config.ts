@@ -36,6 +36,7 @@ export interface SyncConfig {
   accounts: AccountEntry[];
   syncDays: number;
   dryRun: boolean;
+  refreshTransactions: boolean;
   logLevel: LogLevel;
 }
 
@@ -52,6 +53,8 @@ export interface LinkConfig {
   countryCodes: string[];
   port: number;
   host: string;
+  /** Tokens available for the interactive update-mode picker. */
+  accessTokens: string[];
   accessToken?: string;
   logLevel: LogLevel;
 }
@@ -180,6 +183,7 @@ const syncSchema = z.object({
   ...actualShape,
   SYNC_DAYS: intInRange(1, 730).default(30),
   DRY_RUN: booleanFlag.default(false),
+  PLAID_REFRESH_TRANSACTIONS: booleanFlag.default(false),
   ...logLevelShape,
 });
 
@@ -193,6 +197,7 @@ const accountsSchema = z.object({
 
 const linkSchema = z.object({
   ...plaidShape,
+  PLAID_ACCESS_TOKENS: z.string().default('').transform(splitList),
   PLAID_COUNTRY_CODES: countryCodes.default(['US']),
   LINK_PORT: intInRange(1, 65535).default(8484),
   LINK_HOST: z.string().default('127.0.0.1'),
@@ -427,6 +432,7 @@ export function loadSyncConfig(
     accounts: file.accounts,
     syncDays: data.SYNC_DAYS,
     dryRun: data.DRY_RUN,
+    refreshTransactions: data.PLAID_REFRESH_TRANSACTIONS,
     logLevel: data.LOG_LEVEL,
   };
 }
@@ -449,6 +455,7 @@ export function loadLinkConfig(env: NodeJS.ProcessEnv): LinkConfig {
     countryCodes: parsed.PLAID_COUNTRY_CODES,
     port: parsed.LINK_PORT,
     host: parsed.LINK_HOST,
+    accessTokens: parsed.PLAID_ACCESS_TOKENS,
     ...(parsed.LINK_ACCESS_TOKEN === undefined ? {} : { accessToken: parsed.LINK_ACCESS_TOKEN }),
     logLevel: parsed.LOG_LEVEL,
   };

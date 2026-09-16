@@ -48,6 +48,12 @@ description = "Connect a bank with Plaid Link (pass extra flags after --)"
 depends = ["build"]
 run = "node dist/cli.js link"
 
+[tasks."link:update"]
+description = "Repair a bank connection, choosing its token from PLAID_ACCESS_TOKENS"
+depends = ["build"]
+interactive = true
+run = "node dist/cli.js link --update"
+
 [tasks.accounts]
 description = "List Plaid and Actual accounts and write accounts.yaml"
 depends = ["build"]

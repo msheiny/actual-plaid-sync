@@ -12,6 +12,7 @@ import { computeWindow } from './window.js';
 
 export interface SyncDeps {
   fetchTransactions(accessToken: string, start: string, end: string): Promise<PlaidFetchResult>;
+  refreshTransactions(accessToken: string): Promise<void>;
   gateway: ActualGateway;
   log: Logger;
   today: string;
@@ -73,9 +74,27 @@ export async function runSync(cfg: SyncConfig, deps: SyncDeps): Promise<0 | 1> {
   const plaidAccounts: PlaidAccountInfo[] = [];
 
   log.info(`Syncing Plaid transactions from ${window.start} to ${window.end}`);
+  if (cfg.refreshTransactions && cfg.dryRun) {
+    log.info('[dry run] Skipping Plaid transaction refresh');
+  }
 
-  for (const token of cfg.accessTokens) {
+  for (const [tokenIndex, token] of cfg.accessTokens.entries()) {
     const masked = maskToken(token);
+    const bank = `Bank ${tokenIndex + 1} (${masked})`;
+    if (cfg.refreshTransactions && !cfg.dryRun) {
+      try {
+        await deps.refreshTransactions(token);
+        log.info(`Refreshed Plaid transactions for ${bank}`);
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        const code = err instanceof PlaidRequestError ? ` with ${err.code ?? err.kind}` : '';
+        const requestId =
+          err instanceof PlaidRequestError && err.requestId ? ` (request ${err.requestId})` : '';
+        log.warn(
+          `${bank} refresh failed${code}: ${detail}${requestId}; fetching transactions normally using Plaid's cached data`,
+        );
+      }
+    }
     try {
       const result = await deps.fetchTransactions(token, window.start, window.end);
       plaidAccounts.push(...result.accounts);
@@ -84,24 +103,22 @@ export async function runSync(cfg: SyncConfig, deps: SyncDeps): Promise<0 | 1> {
         list.push(txn);
         txnsByAccount.set(txn.accountId, list);
       }
-      log.debug(`Fetched ${result.transactions.length} Plaid transactions for bank ${masked}`);
+      log.debug(`Fetched ${result.transactions.length} Plaid transactions for ${bank}`);
     } catch (err) {
       incomplete = true;
       if (err instanceof PlaidRequestError && err.kind === 'relink') {
         log.error(
-          `Bank ${masked} needs re-authentication: run \`link --update\` with LINK_ACCESS_TOKEN set to this token`,
+          `${bank} needs re-authentication: run \`mise run link:update\` and choose bank ${tokenIndex + 1}`,
         );
         failed = true;
       } else if (err instanceof PlaidRequestError && err.kind === 'not-ready') {
-        log.warn(
-          `Bank ${masked} transactions are not ready yet (PRODUCT_NOT_READY); skipping this run`,
-        );
+        log.warn(`${bank} transactions are not ready yet (PRODUCT_NOT_READY); skipping this run`);
       } else if (err instanceof PlaidRequestError) {
         const requestId = err.requestId ? ` (request ${err.requestId})` : '';
-        log.error(`Bank ${masked} failed with ${err.code ?? err.kind}: ${err.message}${requestId}`);
+        log.error(`${bank} failed with ${err.code ?? err.kind}: ${err.message}${requestId}`);
         failed = true;
       } else {
-        log.error(`Bank ${masked} failed: ${err instanceof Error ? err.message : String(err)}`);
+        log.error(`${bank} failed: ${err instanceof Error ? err.message : String(err)}`);
         failed = true;
       }
     }

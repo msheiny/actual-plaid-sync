@@ -87,6 +87,7 @@ describe('loadSyncConfig', () => {
         ACTUAL_ENCRYPTION_PASSWORD: 'e2e-pw',
         SYNC_DAYS: '14',
         DRY_RUN: 'true',
+        PLAID_REFRESH_TRANSACTIONS: 'true',
         LOG_LEVEL: 'debug',
       },
       readFile,
@@ -108,6 +109,7 @@ describe('loadSyncConfig', () => {
       ],
       syncDays: 14,
       dryRun: true,
+      refreshTransactions: true,
       logLevel: 'debug',
     });
   });
@@ -118,6 +120,7 @@ describe('loadSyncConfig', () => {
     expect(cfg.accountsFile).toBe('accounts.yaml');
     expect(cfg.syncDays).toBe(30);
     expect(cfg.dryRun).toBe(false);
+    expect(cfg.refreshTransactions).toBe(false);
     expect(cfg.logLevel).toBe('info');
     expect(cfg.actual).not.toHaveProperty('encryptionPassword');
   });
@@ -127,10 +130,12 @@ describe('loadSyncConfig', () => {
       ...SYNC_ENV,
       ACTUAL_ENCRYPTION_PASSWORD: '',
       SYNC_DAYS: '  ',
+      PLAID_REFRESH_TRANSACTIONS: '  ',
       LOG_LEVEL: '',
     });
 
     expect(cfg.syncDays).toBe(30);
+    expect(cfg.refreshTransactions).toBe(false);
     expect(cfg.logLevel).toBe('info');
     expect(cfg.actual).not.toHaveProperty('encryptionPassword');
   });
@@ -191,9 +196,28 @@ describe('loadSyncConfig', () => {
     expect(loadSync({ ...SYNC_ENV, DRY_RUN: value }).dryRun).toBe(expected);
   });
 
+  it.each([
+    ['true', true],
+    ['TRUE', true],
+    ['1', true],
+    ['false', false],
+    ['False', false],
+    ['0', false],
+  ])('parses PLAID_REFRESH_TRANSACTIONS=%j as %s', (value, expected) => {
+    expect(loadSync({ ...SYNC_ENV, PLAID_REFRESH_TRANSACTIONS: value }).refreshTransactions).toBe(
+      expected,
+    );
+  });
+
   it('rejects an invalid DRY_RUN', () => {
     expect(problemsOf(() => loadSync({ ...SYNC_ENV, DRY_RUN: 'yes' }))).toEqual([
       'DRY_RUN: must be one of: true, false, 1, 0 (got "yes")',
+    ]);
+  });
+
+  it('rejects an invalid PLAID_REFRESH_TRANSACTIONS', () => {
+    expect(problemsOf(() => loadSync({ ...SYNC_ENV, PLAID_REFRESH_TRANSACTIONS: 'yes' }))).toEqual([
+      'PLAID_REFRESH_TRANSACTIONS: must be one of: true, false, 1, 0 (got "yes")',
     ]);
   });
 
@@ -449,6 +473,7 @@ describe('loadLinkConfig', () => {
   it('applies defaults', () => {
     expect(loadLinkConfig(PLAID_ENV_VARS)).toEqual({
       plaid: { clientId: 'client-123', secret: 'secret-456', env: 'sandbox' },
+      accessTokens: [],
       countryCodes: ['US'],
       port: 8484,
       host: '127.0.0.1',
@@ -463,11 +488,13 @@ describe('loadLinkConfig', () => {
         PLAID_COUNTRY_CODES: 'us, ca,,GB',
         LINK_PORT: '3000',
         LINK_HOST: '0.0.0.0',
+        PLAID_ACCESS_TOKENS: ' access-sandbox-one, access-sandbox-two ',
         LINK_ACCESS_TOKEN: 'access-sandbox-zzzz',
         LOG_LEVEL: 'warn',
       }),
     ).toEqual({
       plaid: { clientId: 'client-123', secret: 'secret-456', env: 'sandbox' },
+      accessTokens: ['access-sandbox-one', 'access-sandbox-two'],
       countryCodes: ['US', 'CA', 'GB'],
       port: 3000,
       host: '0.0.0.0',

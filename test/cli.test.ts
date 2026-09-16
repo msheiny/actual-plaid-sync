@@ -6,6 +6,8 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 const mocks = vi.hoisted(() => ({
   withBudget: vi.fn(),
   runSync: vi.fn(),
+  plaidFetchTransactions: vi.fn(),
+  plaidRefreshTransactions: vi.fn(),
   sessionLoads: 0,
   startLinkServer: vi.fn(),
 }));
@@ -19,6 +21,10 @@ vi.mock('../src/actual/session.js', () => {
   return { withBudget: mocks.withBudget };
 });
 vi.mock('../src/sync/run.js', () => ({ runSync: mocks.runSync }));
+vi.mock('../src/plaid/transactions.js', () => ({
+  fetchTransactions: mocks.plaidFetchTransactions,
+  refreshTransactions: mocks.plaidRefreshTransactions,
+}));
 // Only startLinkServer is faked (no real socket); formatLinkResult stays real so the success-path
 // test below exercises the actual output formatting too.
 vi.mock('../src/link/server.js', async (importOriginal) => {
@@ -53,6 +59,8 @@ beforeEach(async () => {
   stderr = [];
   mocks.withBudget.mockReset();
   mocks.runSync.mockReset();
+  mocks.plaidFetchTransactions.mockReset();
+  mocks.plaidRefreshTransactions.mockReset();
   mocks.startLinkServer.mockReset();
   mocks.sessionLoads = 0;
   vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
@@ -192,6 +200,46 @@ describe('main', () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
+  it('automatically uses the only token in PLAID_ACCESS_TOKENS for link --update', async () => {
+    const close = vi.fn().mockResolvedValue(undefined);
+    mocks.startLinkServer.mockResolvedValue({
+      url: 'http://localhost:18585',
+      result: Promise.resolve({
+        accessToken: 'access-sandbox-only',
+        itemId: null,
+        accounts: [],
+      }),
+      close,
+    });
+    const env = {
+      PLAID_CLIENT_ID: 'client-id',
+      PLAID_SECRET: 'secret',
+      PLAID_ENV: 'sandbox',
+      PLAID_ACCESS_TOKENS: 'access-sandbox-only',
+    };
+
+    await expect(main(['link', '--update'], env)).resolves.toBe(0);
+
+    expect(mocks.startLinkServer).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: 'update', accessToken: 'access-sandbox-only' }),
+    );
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('requires an explicit token when multiple tokens are used without a terminal', async () => {
+    const env = {
+      PLAID_CLIENT_ID: 'client-id',
+      PLAID_SECRET: 'secret',
+      PLAID_ENV: 'sandbox',
+      PLAID_ACCESS_TOKENS: 'access-sandbox-one,access-sandbox-two',
+    };
+
+    await expect(main(['link', '--update'], env)).resolves.toBe(2);
+
+    expect(stderr.join('')).toContain('multiple tokens');
+    expect(mocks.startLinkServer).not.toHaveBeenCalled();
+  });
+
   it('prefers --access-token over LINK_ACCESS_TOKEN when both are given', async () => {
     const close = vi.fn().mockResolvedValue(undefined);
     mocks.startLinkServer.mockResolvedValue({
@@ -268,6 +316,9 @@ describe('main', () => {
     expect(deps.gateway).toBe(gateway);
     expect(deps.today).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(typeof deps.fetchTransactions).toBe('function');
+    expect(typeof deps.refreshTransactions).toBe('function');
+    await (deps.refreshTransactions as (token: string) => Promise<void>)('access-test');
+    expect(mocks.plaidRefreshTransactions).toHaveBeenCalledWith(expect.anything(), 'access-test');
   });
 
   it('exits 1 and logs the hint when Actual fails', async () => {

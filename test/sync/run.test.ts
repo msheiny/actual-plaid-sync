@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ActualAccountInfo, ActualGateway, ImportResult } from '../../src/actual/session.js';
 import { ActualError } from '../../src/actual/session.js';
 import type { SyncConfig } from '../../src/config.js';
@@ -95,6 +95,7 @@ function config(overrides: Partial<SyncConfig> = {}): SyncConfig {
     accounts: [{ plaid: { id: 'plaid-chk' }, actual: 'Chase Checking' }],
     syncDays: 30,
     dryRun: false,
+    refreshTransactions: false,
     logLevel: 'debug',
     ...overrides,
   };
@@ -228,6 +229,155 @@ describe('executePlan', () => {
 });
 
 describe('runSync', () => {
+  it('refreshes each token in order before fetching when enabled', async () => {
+    const { gateway, good } = scenario();
+    const { log, has } = logSink();
+    const events: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let first = true;
+    const pending = runSync(
+      config({
+        refreshTransactions: true,
+        accessTokens: ['access-first-1111', 'access-second-2222'],
+      }),
+      {
+        gateway,
+        log,
+        today: TODAY,
+        refreshTransactions: async (token) => {
+          events.push(`refresh ${token}`);
+          if (first) {
+            first = false;
+            await gate;
+          }
+        },
+        fetchTransactions: async (token) => {
+          events.push(`fetch ${token}`);
+          return token === 'access-first-1111' ? good : { accounts: [], transactions: [] };
+        },
+      },
+    );
+    await Promise.resolve();
+    expect(events).toEqual(['refresh access-first-1111']);
+    release();
+    const code = await pending;
+    expect(code).toBe(0);
+    expect(events).toEqual([
+      'refresh access-first-1111',
+      'fetch access-first-1111',
+      'refresh access-second-2222',
+      'fetch access-second-2222',
+    ]);
+    // Refresh is billed per request, so each one stays visible at the default info level.
+    expect(has('INFO Refreshed Plaid transactions for Bank 1 (…1111)')).toBe(true);
+    expect(has('INFO Refreshed Plaid transactions for Bank 2 (…2222)')).toBe(true);
+  });
+
+  it('does not refresh by default', async () => {
+    const { gateway, good } = scenario();
+    const { log } = logSink();
+    const refresh = vi.fn();
+    await runSync(config(), {
+      gateway,
+      log,
+      today: TODAY,
+      refreshTransactions: refresh,
+      fetchTransactions: async () => good,
+    });
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it('skips refresh during dry runs and logs the notice once', async () => {
+    const { gateway, good } = scenario();
+    const { log, lines } = logSink();
+    const refresh = vi.fn();
+    await runSync(config({ refreshTransactions: true, dryRun: true }), {
+      gateway,
+      log,
+      today: TODAY,
+      refreshTransactions: refresh,
+      fetchTransactions: async () => good,
+    });
+    expect(refresh).not.toHaveBeenCalled();
+    expect(
+      lines.filter((line) => line.includes('Skipping Plaid transaction refresh')),
+    ).toHaveLength(1);
+  });
+
+  it.each([
+    ['not-ready', 'PRODUCT_NOT_READY'],
+    ['fatal', 'PRODUCTS_NOT_SUPPORTED'],
+    ['fatal', 'TRANSACTIONS_NOT_INITIALIZED'],
+    ['relink', 'ITEM_LOGIN_REQUIRED'],
+    ['retryable', 'RATE_LIMIT_EXCEEDED'],
+  ] as const)(
+    'falls back to cached transactions after refresh %s/%s and continues',
+    async (kind, errorCode) => {
+      const { gateway, good } = scenario();
+      gateway.accounts.push({ id: 'actual-card', name: 'Amex', closed: false, offbudget: false });
+      const second: PlaidFetchResult = {
+        accounts: [plaidAccount('plaid-card', 'Plaid Card', '5555')],
+        transactions: [plaidTxn({ accountId: 'plaid-card', transactionId: 'new-card' })],
+      };
+      const { log, has, lines } = logSink();
+      const fetch = vi.fn(async (token: string) => (token === 'access-bad-9999' ? good : second));
+      const code = await runSync(
+        config({
+          refreshTransactions: true,
+          accessTokens: ['access-bad-9999', 'access-good-1111'],
+          accounts: [
+            { plaid: { id: 'plaid-chk' }, actual: 'Chase Checking' },
+            { plaid: { id: 'plaid-card' }, actual: 'Amex' },
+          ],
+        }),
+        {
+          gateway,
+          log,
+          today: TODAY,
+          refreshTransactions: async (token) => {
+            if (token === 'access-bad-9999') throw plaidError(kind, errorCode);
+          },
+          fetchTransactions: fetch,
+        },
+      );
+      expect(code).toBe(0);
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(fetch).toHaveBeenNthCalledWith(1, 'access-bad-9999', '2026-08-14', '2026-09-13');
+      expect(fetch).toHaveBeenNthCalledWith(2, 'access-good-1111', '2026-08-14', '2026-09-13');
+      expect(has(`Bank 1 (…9999) refresh failed with ${errorCode}`)).toBe(true);
+      expect(lines.join('\n')).not.toContain('access-bad-9999');
+      expect(lines.join('\n')).not.toContain('access-good-1111');
+      expect(has('Chase Checking: 1 added')).toBe(true);
+      expect(has('Amex: 1 added')).toBe(true);
+      expect(gateway.calls).toContain('import actual-card new-card');
+    },
+  );
+
+  it('preserves Actual transactions and gives the repair hint when refresh fallback also fails', async () => {
+    const { gateway } = scenario();
+    const { log, has } = logSink();
+    const fetch = vi.fn(async () => {
+      throw plaidError('relink', 'ITEM_LOGIN_REQUIRED');
+    });
+    const code = await runSync(config({ refreshTransactions: true }), {
+      gateway,
+      log,
+      today: TODAY,
+      refreshTransactions: async () => {
+        throw plaidError('relink', 'ITEM_LOGIN_REQUIRED');
+      },
+      fetchTransactions: fetch,
+    });
+    expect(code).toBe(1);
+    expect(fetch).toHaveBeenCalledWith('access-good-1111', '2026-08-14', '2026-09-13');
+    expect(gateway.calls).toEqual([]);
+    expect(has('needs re-authentication')).toBe(true);
+    expect(has('mise run link:update')).toBe(true);
+  });
+
   it('applies the plan and logs a summary per account', async () => {
     const { gateway, good } = scenario();
     const { log, has } = logSink();
@@ -236,6 +386,7 @@ describe('runSync', () => {
       gateway,
       log,
       today: TODAY,
+      refreshTransactions: async () => undefined,
       fetchTransactions: async (token, start, end) => {
         fetched.push(`${token} ${start} ${end}`);
         return good;
@@ -263,6 +414,7 @@ describe('runSync', () => {
       gateway,
       log,
       today: TODAY,
+      refreshTransactions: async () => undefined,
       fetchTransactions: async () => good,
     });
     expect(code).toBe(0);
@@ -304,6 +456,7 @@ describe('runSync', () => {
         gateway,
         log,
         today: TODAY,
+        refreshTransactions: async () => undefined,
         fetchTransactions: async (token) => {
           if (token === 'access-bad-9999') throw plaidError('relink', 'ITEM_LOGIN_REQUIRED');
           return good;
@@ -312,9 +465,7 @@ describe('runSync', () => {
     );
     expect(code).toBe(1);
     expect(
-      has(
-        'Bank …9999 needs re-authentication: run `link --update` with LINK_ACCESS_TOKEN set to this token',
-      ),
+      has('Bank 1 (…9999) needs re-authentication: run `mise run link:update` and choose bank 1'),
     ).toBe(true);
     expect(has('access-bad-9999')).toBe(false);
     expect(has('on any access token')).toBe(false);
@@ -350,6 +501,7 @@ describe('runSync', () => {
         gateway,
         log,
         today: TODAY,
+        refreshTransactions: async () => undefined,
         fetchTransactions: async (token) => {
           if (token === 'access-new-2222') throw plaidError('not-ready', 'PRODUCT_NOT_READY');
           return good;
@@ -371,12 +523,13 @@ describe('runSync', () => {
       gateway,
       log,
       today: TODAY,
+      refreshTransactions: async () => undefined,
       fetchTransactions: async () => {
         throw plaidError('fatal', 'INVALID_ACCESS_TOKEN');
       },
     });
     expect(code).toBe(1);
-    expect(has('Bank …1111 failed with INVALID_ACCESS_TOKEN')).toBe(true);
+    expect(has('Bank 1 (…1111) failed with INVALID_ACCESS_TOKEN')).toBe(true);
     expect(gateway.calls).toEqual([]);
   });
 
@@ -387,6 +540,7 @@ describe('runSync', () => {
       gateway,
       log,
       today: TODAY,
+      refreshTransactions: async () => undefined,
       fetchTransactions: async () => ({
         ...good,
         accounts: [...good.accounts, plaidAccount('plaid-savings', 'Plaid Saving', '1111')],
@@ -402,7 +556,13 @@ describe('runSync', () => {
     const { log, has } = logSink();
     const code = await runSync(
       config({ accounts: [{ plaid: { id: 'plaid-chk' }, actual: 'Missing Account' }] }),
-      { gateway, log, today: TODAY, fetchTransactions: async () => good },
+      {
+        gateway,
+        log,
+        today: TODAY,
+        refreshTransactions: async () => undefined,
+        fetchTransactions: async () => good,
+      },
     );
     expect(code).toBe(1);
     expect(
@@ -418,7 +578,13 @@ describe('runSync', () => {
     const { log, has } = logSink();
     const code = await runSync(
       config({ accounts: [{ plaid: { mask: '9999' }, actual: 'Chase Checking' }] }),
-      { gateway, log, today: TODAY, fetchTransactions: async () => good },
+      {
+        gateway,
+        log,
+        today: TODAY,
+        refreshTransactions: async () => undefined,
+        fetchTransactions: async () => good,
+      },
     );
     expect(code).toBe(1);
     expect(
@@ -445,6 +611,7 @@ describe('runSync', () => {
         gateway,
         log,
         today: TODAY,
+        refreshTransactions: async () => undefined,
         fetchTransactions: async (token) =>
           token === 'access-good-1111'
             ? good
@@ -471,6 +638,7 @@ describe('runSync', () => {
       gateway,
       log,
       today: TODAY,
+      refreshTransactions: async () => undefined,
       fetchTransactions: async () => good,
     });
     expect(code).toBe(1);
@@ -489,6 +657,7 @@ describe('runSync', () => {
       gateway,
       log,
       today: TODAY,
+      refreshTransactions: async () => undefined,
       fetchTransactions: async () => good,
     });
     expect(code).toBe(0);
@@ -539,6 +708,7 @@ describe('runSync', () => {
         gateway,
         log,
         today: TODAY,
+        refreshTransactions: async () => undefined,
         fetchTransactions: async () => ({
           accounts: [
             plaidAccount('plaid-a', 'Plaid A', '1111'),
@@ -593,6 +763,7 @@ describe('runSync', () => {
         gateway,
         log,
         today: TODAY,
+        refreshTransactions: async () => undefined,
         fetchTransactions: async () => ({
           accounts: [
             plaidAccount('plaid-a', 'Plaid A', '1111'),
@@ -629,6 +800,7 @@ describe('runSync', () => {
       gateway,
       log,
       today: TODAY,
+      refreshTransactions: async () => undefined,
       fetchTransactions: async () => ({
         accounts: [
           plaidAccount('plaid-chk', 'Plaid Checking', '0000'),
@@ -652,6 +824,7 @@ describe('runSync', () => {
       gateway,
       log,
       today: TODAY,
+      refreshTransactions: async () => undefined,
       fetchTransactions: async () => good,
     });
     expect(gateway.getTransactionsCalls).toEqual([

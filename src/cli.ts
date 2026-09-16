@@ -13,6 +13,7 @@ import {
 } from './config.js';
 import { createLinkDeps } from './link/plaid-link.js';
 import { formatLinkResult, startLinkServer } from './link/server.js';
+import { selectAccessToken } from './link/token-picker.js';
 import { createLogger, type LogLevel } from './log.js';
 import { createPlaidClient, PlaidRequestError } from './plaid/client.js';
 import { todayUtc } from './sync/window.js';
@@ -36,22 +37,22 @@ interface LinkOptions {
   accessToken?: string;
 }
 
-// The "LINK_ACCESS_TOKEN (or --access-token) is required for link --update" check itself lives in
-// createLinkDeps (src/link/plaid-link.ts), which is called below before the server starts. This
-// only merges the --access-token override (which takes priority over LINK_ACCESS_TOKEN) into the
-// config so that check sees it; it never duplicates the check or its message.
-function resolveLinkConfig(
+// Explicit inputs take priority; otherwise update mode selects from PLAID_ACCESS_TOKENS.
+async function resolveLinkConfig(
   env: NodeJS.ProcessEnv,
   opts: LinkOptions,
-): { cfg: LinkConfig; mode: 'create' | 'update' } {
+): Promise<{ cfg: LinkConfig; mode: 'create' | 'update' }> {
   const mode = opts.update ? 'update' : 'create';
   const cfg = loadLinkConfig(env);
-  const accessToken = opts.accessToken ?? cfg.accessToken;
+  let accessToken = opts.accessToken ?? cfg.accessToken;
+  if (mode === 'update' && accessToken === undefined) {
+    accessToken = await selectAccessToken(cfg.accessTokens);
+  }
   return { cfg: accessToken === undefined ? cfg : { ...cfg, accessToken }, mode };
 }
 
 async function runLink(env: NodeJS.ProcessEnv, opts: LinkOptions): Promise<number> {
-  const { cfg, mode } = resolveLinkConfig(env, opts);
+  const { cfg, mode } = await resolveLinkConfig(env, opts);
   const log = createLogger(cfg.logLevel);
   if (mode === 'create' && opts.accessToken) {
     log.warn('--access-token is ignored without --update');
@@ -112,10 +113,11 @@ function buildProgram(env: NodeJS.ProcessEnv, setExitCode: (code: number) => voi
       // Loaded lazily: @actual-app/api pulls in native sqlite, which --help and link never need.
       const { withBudget } = await import('./actual/session.js');
       const { runSync } = await import('./sync/run.js');
-      const { fetchTransactions } = await import('./plaid/transactions.js');
+      const { fetchTransactions, refreshTransactions } = await import('./plaid/transactions.js');
       const code = await withBudget(cfg.actual, log, (gateway) =>
         runSync(cfg, {
           fetchTransactions: (token, start, end) => fetchTransactions(client, token, start, end),
+          refreshTransactions: (token) => refreshTransactions(client, token),
           gateway,
           log,
           today: todayUtc(),
