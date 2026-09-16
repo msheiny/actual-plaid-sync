@@ -192,6 +192,46 @@ describe('main', () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
+  it('automatically uses the only token in PLAID_ACCESS_TOKENS for link --update', async () => {
+    const close = vi.fn().mockResolvedValue(undefined);
+    mocks.startLinkServer.mockResolvedValue({
+      url: 'http://localhost:18585',
+      result: Promise.resolve({
+        accessToken: 'access-sandbox-only',
+        itemId: null,
+        accounts: [],
+      }),
+      close,
+    });
+    const env = {
+      PLAID_CLIENT_ID: 'client-id',
+      PLAID_SECRET: 'secret',
+      PLAID_ENV: 'sandbox',
+      PLAID_ACCESS_TOKENS: 'access-sandbox-only',
+    };
+
+    await expect(main(['link', '--update'], env)).resolves.toBe(0);
+
+    expect(mocks.startLinkServer).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: 'update', accessToken: 'access-sandbox-only' }),
+    );
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('requires an explicit token when multiple tokens are used without a terminal', async () => {
+    const env = {
+      PLAID_CLIENT_ID: 'client-id',
+      PLAID_SECRET: 'secret',
+      PLAID_ENV: 'sandbox',
+      PLAID_ACCESS_TOKENS: 'access-sandbox-one,access-sandbox-two',
+    };
+
+    await expect(main(['link', '--update'], env)).resolves.toBe(2);
+
+    expect(stderr.join('')).toContain('multiple tokens');
+    expect(mocks.startLinkServer).not.toHaveBeenCalled();
+  });
+
   it('prefers --access-token over LINK_ACCESS_TOKEN when both are given', async () => {
     const close = vi.fn().mockResolvedValue(undefined);
     mocks.startLinkServer.mockResolvedValue({

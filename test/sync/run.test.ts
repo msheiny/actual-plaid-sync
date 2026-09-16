@@ -312,9 +312,7 @@ describe('runSync', () => {
     );
     expect(code).toBe(1);
     expect(
-      has(
-        'Bank …9999 needs re-authentication: run `link --update` with LINK_ACCESS_TOKEN set to this token',
-      ),
+      has('Bank 1 (…9999) needs re-authentication: run `mise run link:update` and choose bank 1'),
     ).toBe(true);
     expect(has('access-bad-9999')).toBe(false);
     expect(has('on any access token')).toBe(false);
@@ -376,7 +374,7 @@ describe('runSync', () => {
       },
     });
     expect(code).toBe(1);
-    expect(has('Bank …1111 failed with INVALID_ACCESS_TOKEN')).toBe(true);
+    expect(has('Bank 1 (…1111) failed with INVALID_ACCESS_TOKEN')).toBe(true);
     expect(gateway.calls).toEqual([]);
   });
 

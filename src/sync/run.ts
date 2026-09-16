@@ -74,8 +74,9 @@ export async function runSync(cfg: SyncConfig, deps: SyncDeps): Promise<0 | 1> {
 
   log.info(`Syncing Plaid transactions from ${window.start} to ${window.end}`);
 
-  for (const token of cfg.accessTokens) {
+  for (const [tokenIndex, token] of cfg.accessTokens.entries()) {
     const masked = maskToken(token);
+    const bank = `Bank ${tokenIndex + 1} (${masked})`;
     try {
       const result = await deps.fetchTransactions(token, window.start, window.end);
       plaidAccounts.push(...result.accounts);
@@ -84,24 +85,22 @@ export async function runSync(cfg: SyncConfig, deps: SyncDeps): Promise<0 | 1> {
         list.push(txn);
         txnsByAccount.set(txn.accountId, list);
       }
-      log.debug(`Fetched ${result.transactions.length} Plaid transactions for bank ${masked}`);
+      log.debug(`Fetched ${result.transactions.length} Plaid transactions for ${bank}`);
     } catch (err) {
       incomplete = true;
       if (err instanceof PlaidRequestError && err.kind === 'relink') {
         log.error(
-          `Bank ${masked} needs re-authentication: run \`link --update\` with LINK_ACCESS_TOKEN set to this token`,
+          `${bank} needs re-authentication: run \`mise run link:update\` and choose bank ${tokenIndex + 1}`,
         );
         failed = true;
       } else if (err instanceof PlaidRequestError && err.kind === 'not-ready') {
-        log.warn(
-          `Bank ${masked} transactions are not ready yet (PRODUCT_NOT_READY); skipping this run`,
-        );
+        log.warn(`${bank} transactions are not ready yet (PRODUCT_NOT_READY); skipping this run`);
       } else if (err instanceof PlaidRequestError) {
         const requestId = err.requestId ? ` (request ${err.requestId})` : '';
-        log.error(`Bank ${masked} failed with ${err.code ?? err.kind}: ${err.message}${requestId}`);
+        log.error(`${bank} failed with ${err.code ?? err.kind}: ${err.message}${requestId}`);
         failed = true;
       } else {
-        log.error(`Bank ${masked} failed: ${err instanceof Error ? err.message : String(err)}`);
+        log.error(`${bank} failed: ${err instanceof Error ? err.message : String(err)}`);
         failed = true;
       }
     }

@@ -449,6 +449,7 @@ describe('loadLinkConfig', () => {
   it('applies defaults', () => {
     expect(loadLinkConfig(PLAID_ENV_VARS)).toEqual({
       plaid: { clientId: 'client-123', secret: 'secret-456', env: 'sandbox' },
+      accessTokens: [],
       countryCodes: ['US'],
       port: 8484,
       host: '127.0.0.1',
@@ -463,11 +464,13 @@ describe('loadLinkConfig', () => {
         PLAID_COUNTRY_CODES: 'us, ca,,GB',
         LINK_PORT: '3000',
         LINK_HOST: '0.0.0.0',
+        PLAID_ACCESS_TOKENS: ' access-sandbox-one, access-sandbox-two ',
         LINK_ACCESS_TOKEN: 'access-sandbox-zzzz',
         LOG_LEVEL: 'warn',
       }),
     ).toEqual({
       plaid: { clientId: 'client-123', secret: 'secret-456', env: 'sandbox' },
+      accessTokens: ['access-sandbox-one', 'access-sandbox-two'],
       countryCodes: ['US', 'CA', 'GB'],
       port: 3000,
       host: '0.0.0.0',

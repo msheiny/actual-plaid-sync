@@ -23,6 +23,7 @@ function fakeClient() {
 
 const baseCfg: LinkConfig = {
   plaid: { clientId: 'client-id', secret: 'secret', env: 'sandbox' },
+  accessTokens: [],
   countryCodes: ['US', 'CA'],
   port: 8484,
   host: '127.0.0.1',

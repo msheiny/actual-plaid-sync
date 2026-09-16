@@ -124,9 +124,7 @@ export function plaidAccountRow(account: PlaidAccountInfo): string[] {
 function describeError(err: unknown): string {
   if (err instanceof PlaidRequestError) {
     const relink =
-      err.kind === 'relink'
-        ? ' (run `link --update` with LINK_ACCESS_TOKEN set to this token)'
-        : '';
+      err.kind === 'relink' ? ' (run `mise run link:update` and choose this token)' : '';
     return `${err.message}${relink}`;
   }
   return err instanceof Error ? err.message : String(err);
@@ -137,18 +135,19 @@ export async function runAccounts(cfg: AccountsConfig, deps: AccountsDeps): Prom
   let failed = false;
   const plaidAccounts: PlaidAccountInfo[] = [];
 
-  for (const token of cfg.accessTokens) {
+  for (const [tokenIndex, token] of cfg.accessTokens.entries()) {
     const masked = maskToken(token);
+    const bank = `bank ${tokenIndex + 1} (${masked})`;
     let accounts: PlaidAccountInfo[];
     try {
       accounts = await deps.fetchAccounts(token);
     } catch (err) {
-      log.error(`Fetching Plaid accounts for bank ${masked} failed: ${describeError(err)}`);
+      log.error(`Fetching Plaid accounts for ${bank} failed: ${describeError(err)}`);
       failed = true;
       continue;
     }
     plaidAccounts.push(...accounts);
-    print(`Plaid accounts for access token ${masked}:`);
+    print(`Plaid accounts for ${bank}:`);
     const rows = accounts.map(plaidAccountRow);
     for (const l of formatTable(['PLAID ACCOUNT ID', 'NAME', 'MASK', 'TYPE'], rows)) print(l);
     print('');
