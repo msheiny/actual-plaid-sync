@@ -235,7 +235,7 @@ Mise reads `.env`; direct CLI use reads the process environment, and the Docker 
 | `ACTUAL_ENCRYPTION_PASSWORD` | accounts, sync | unset | Password for an end-to-end encrypted budget |
 | `ACCOUNTS_FILE` | accounts, sync | `accounts.yaml` | Output file for `accounts`; input file for `sync`. Relative paths start at the working directory. |
 | `SYNC_DAYS` | sync | `30` | Days of history to fetch, from `1` to `730` |
-| `DRY_RUN` | sync | `false` | `true`: preview transaction changes and skip billable refresh. `false`: apply them. |
+| `DRY_RUN` | sync | `false` | `true`: preview transaction changes and skip refresh. `false`: apply them. |
 | `PLAID_REFRESH_TRANSACTIONS` | sync | `false` | Refresh each bank before fetching transactions; skipped during dry runs. Accepts `true`, `false`, `1`, or `0`. |
 | `LINK_PORT` | link | `8484` | Port for the local Link page |
 | `LINK_HOST` | link | `127.0.0.1` | Address the Link server listens on |
@@ -256,7 +256,7 @@ Sync checks `/item/get` for the Transactions product, then waits for `/transacti
 
 If the product check or refresh fails, sync logs a warning and fetches transactions normally for the same bank using Plaid's cached data. A refresh failure alone does not fail the run; normal fetch and import error handling still applies. Logs use the existing masked bank identifiers and safe Plaid errors.
 
-[Plaid refresh](https://plaid.com/docs/api/products/transactions/#transactionsrefresh) requires separate product access through the Dashboard or your account manager and has a separate add-on fee model. Capital One (`ins_128026`) Items containing only non-depository accounts return `PRODUCTS_NOT_SUPPORTED`. Refresh typically adds under 10 seconds per bank, but can take 30 seconds or more. Allow extra time for all banks and retries in network and scheduler timeouts; the example CronJob has a 900-second deadline. This client does not set an HTTP timeout.
+[Plaid refresh](https://plaid.com/docs/api/products/transactions/#transactionsrefresh) adds a round trip per bank before its transactions are fetched, so a refreshed run takes longer than a normal one. Allow for that, and for retries, in network and scheduler timeouts; the example CronJob has a 900-second deadline. This client does not set an HTTP timeout.
 
 ### Accounts file
 

@@ -23,7 +23,7 @@ stringData:
   ACTUAL_ENCRYPTION_PASSWORD: change-me
   SYNC_DAYS: "30"
   DRY_RUN: "false"
-  # Optional billable Plaid add-on; dry runs always skip refresh.
+  # Optional Plaid transaction refresh; dry runs always skip it.
   PLAID_REFRESH_TRANSACTIONS: "false"
   LOG_LEVEL: info
 ---
