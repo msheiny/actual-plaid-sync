@@ -36,6 +36,7 @@ export interface SyncConfig {
   accounts: AccountEntry[];
   syncDays: number;
   dryRun: boolean;
+  refreshTransactions: boolean;
   logLevel: LogLevel;
 }
 
@@ -182,6 +183,7 @@ const syncSchema = z.object({
   ...actualShape,
   SYNC_DAYS: intInRange(1, 730).default(30),
   DRY_RUN: booleanFlag.default(false),
+  PLAID_REFRESH_TRANSACTIONS: booleanFlag.default(false),
   ...logLevelShape,
 });
 
@@ -430,6 +432,7 @@ export function loadSyncConfig(
     accounts: file.accounts,
     syncDays: data.SYNC_DAYS,
     dryRun: data.DRY_RUN,
+    refreshTransactions: data.PLAID_REFRESH_TRANSACTIONS,
     logLevel: data.LOG_LEVEL,
   };
 }

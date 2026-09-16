@@ -1,9 +1,26 @@
-import type { PlaidApi, Transaction } from 'plaid';
+import { type PlaidApi, Products, type Transaction } from 'plaid';
 import type { PlaidFetchResult, PlaidTxn } from '../sync/types.js';
 import { type PlaidAccountInfo, toPlaidAccountInfo } from './accounts.js';
-import { withRetry } from './client.js';
+import { PlaidRequestError, withRetry } from './client.js';
 
 const PAGE_SIZE = 500;
+
+/** Refresh the Transactions product when it is initialized for the Item. */
+export async function refreshTransactions(client: PlaidApi, accessToken: string): Promise<void> {
+  const response = await withRetry(() => client.itemGet({ access_token: accessToken }));
+  const item = response.data.item;
+  const products = item.products ?? item.billed_products ?? [];
+  if (!products.includes(Products.Transactions)) {
+    throw new PlaidRequestError(
+      'Plaid Transactions product is not initialized for this Item',
+      'fatal',
+      'TRANSACTIONS_NOT_INITIALIZED',
+      null,
+    );
+  }
+
+  await withRetry(() => client.transactionsRefresh({ access_token: accessToken }));
+}
 
 export function toPlaidTxn(t: Transaction): PlaidTxn {
   return {

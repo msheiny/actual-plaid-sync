@@ -113,10 +113,11 @@ function buildProgram(env: NodeJS.ProcessEnv, setExitCode: (code: number) => voi
       // Loaded lazily: @actual-app/api pulls in native sqlite, which --help and link never need.
       const { withBudget } = await import('./actual/session.js');
       const { runSync } = await import('./sync/run.js');
-      const { fetchTransactions } = await import('./plaid/transactions.js');
+      const { fetchTransactions, refreshTransactions } = await import('./plaid/transactions.js');
       const code = await withBudget(cfg.actual, log, (gateway) =>
         runSync(cfg, {
           fetchTransactions: (token, start, end) => fetchTransactions(client, token, start, end),
+          refreshTransactions: (token) => refreshTransactions(client, token),
           gateway,
           log,
           today: todayUtc(),

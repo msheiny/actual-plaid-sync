@@ -12,6 +12,7 @@ import { computeWindow } from './window.js';
 
 export interface SyncDeps {
   fetchTransactions(accessToken: string, start: string, end: string): Promise<PlaidFetchResult>;
+  refreshTransactions(accessToken: string): Promise<void>;
   gateway: ActualGateway;
   log: Logger;
   today: string;
@@ -73,10 +74,27 @@ export async function runSync(cfg: SyncConfig, deps: SyncDeps): Promise<0 | 1> {
   const plaidAccounts: PlaidAccountInfo[] = [];
 
   log.info(`Syncing Plaid transactions from ${window.start} to ${window.end}`);
+  if (cfg.refreshTransactions && cfg.dryRun) {
+    log.info('[dry run] Skipping Plaid transaction refresh');
+  }
 
   for (const [tokenIndex, token] of cfg.accessTokens.entries()) {
     const masked = maskToken(token);
     const bank = `Bank ${tokenIndex + 1} (${masked})`;
+    if (cfg.refreshTransactions && !cfg.dryRun) {
+      try {
+        await deps.refreshTransactions(token);
+        log.info(`Refreshed Plaid transactions for ${bank}`);
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        const code = err instanceof PlaidRequestError ? ` with ${err.code ?? err.kind}` : '';
+        const requestId =
+          err instanceof PlaidRequestError && err.requestId ? ` (request ${err.requestId})` : '';
+        log.warn(
+          `${bank} refresh failed${code}: ${detail}${requestId}; fetching transactions normally using Plaid's cached data`,
+        );
+      }
+    }
     try {
       const result = await deps.fetchTransactions(token, window.start, window.end);
       plaidAccounts.push(...result.accounts);

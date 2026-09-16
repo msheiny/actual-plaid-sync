@@ -23,6 +23,8 @@ stringData:
   ACTUAL_ENCRYPTION_PASSWORD: change-me
   SYNC_DAYS: "30"
   DRY_RUN: "false"
+  # Optional billable Plaid add-on; dry runs always skip refresh.
+  PLAID_REFRESH_TRANSACTIONS: "false"
   LOG_LEVEL: info
 ---
 # Which Plaid accounts sync into which Actual accounts (start from the output of `accounts`).

@@ -6,6 +6,8 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 const mocks = vi.hoisted(() => ({
   withBudget: vi.fn(),
   runSync: vi.fn(),
+  plaidFetchTransactions: vi.fn(),
+  plaidRefreshTransactions: vi.fn(),
   sessionLoads: 0,
   startLinkServer: vi.fn(),
 }));
@@ -19,6 +21,10 @@ vi.mock('../src/actual/session.js', () => {
   return { withBudget: mocks.withBudget };
 });
 vi.mock('../src/sync/run.js', () => ({ runSync: mocks.runSync }));
+vi.mock('../src/plaid/transactions.js', () => ({
+  fetchTransactions: mocks.plaidFetchTransactions,
+  refreshTransactions: mocks.plaidRefreshTransactions,
+}));
 // Only startLinkServer is faked (no real socket); formatLinkResult stays real so the success-path
 // test below exercises the actual output formatting too.
 vi.mock('../src/link/server.js', async (importOriginal) => {
@@ -53,6 +59,8 @@ beforeEach(async () => {
   stderr = [];
   mocks.withBudget.mockReset();
   mocks.runSync.mockReset();
+  mocks.plaidFetchTransactions.mockReset();
+  mocks.plaidRefreshTransactions.mockReset();
   mocks.startLinkServer.mockReset();
   mocks.sessionLoads = 0;
   vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
@@ -308,6 +316,9 @@ describe('main', () => {
     expect(deps.gateway).toBe(gateway);
     expect(deps.today).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(typeof deps.fetchTransactions).toBe('function');
+    expect(typeof deps.refreshTransactions).toBe('function');
+    await (deps.refreshTransactions as (token: string) => Promise<void>)('access-test');
+    expect(mocks.plaidRefreshTransactions).toHaveBeenCalledWith(expect.anything(), 'access-test');
   });
 
   it('exits 1 and logs the hint when Actual fails', async () => {
