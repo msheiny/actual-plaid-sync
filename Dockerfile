@@ -2,7 +2,7 @@
 # needs TARGETARCH and RUN --mount cache support.
 
 # ---- build: pnpm (checksum-verified), deps, tsc, production deploy into /out ----
-FROM docker.io/library/node:24-trixie-slim@sha256:6950b66b4c0cb0151ce89fa75074673850763d096b044f422c6729b588dd4956 AS build
+FROM docker.io/library/node:24-trixie-slim@sha256:54f84b4cf8432b21aaffd5d3ce8d41e12cea0d10d33c09d2f3c9879d49d6b446 AS build
 
 # Keep PNPM_VERSION equal to the pnpm version in mise.toml. When bumping, take the checksums from
 # `gh release view v<version> --repo pnpm/pnpm --json assets` (the `digest` of
@@ -46,7 +46,7 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm-store \
     && test -d /out/node_modules/@actual-app/api
 
 # ---- runtime: compiled JS + production node_modules only, owned by root, run as node ----
-FROM docker.io/library/node:24-trixie-slim@sha256:6950b66b4c0cb0151ce89fa75074673850763d096b044f422c6729b588dd4956 AS runtime
+FROM docker.io/library/node:24-trixie-slim@sha256:54f84b4cf8432b21aaffd5d3ce8d41e12cea0d10d33c09d2f3c9879d49d6b446 AS runtime
 
 ENV NODE_ENV=production
 WORKDIR /app
